@@ -904,6 +904,62 @@ namespace confighttp {
   }
 
   /**
+   * @brief Generate (or regenerate) the read-only API key.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   *
+   * Cookie/admin auth only (POST is never honored by the Bearer path, so a key cannot
+   * regenerate itself). Returns the plaintext key once; only its hash is stored.
+   *
+   * @api_examples{/api/token| POST| null}
+   */
+  void generateApiToken(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
+    std::string token = crypto::rand_alphabet(48);
+    std::string token_hash = http::hash_api_token(token);
+    if (http::save_api_token(config::sunshine.credentials_file, token_hash)) {
+      bad_request(response, request, "Failed to save API token");
+      return;
+    }
+    config::sunshine.api_token = token_hash;
+
+    nlohmann::json output_tree;
+    output_tree["status"] = true;
+    output_tree["token"] = token;  // shown once; not recoverable later
+    send_response(response, output_tree);
+  }
+
+  /**
+   * @brief Revoke the read-only API key.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   *
+   * @api_examples{/api/token| DELETE| null}
+   */
+  void revokeApiToken(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
+    if (http::save_api_token(config::sunshine.credentials_file, "")) {
+      bad_request(response, request, "Failed to revoke API token");
+      return;
+    }
+    config::sunshine.api_token = "";
+
+    nlohmann::json output_tree;
+    output_tree["status"] = true;
+    send_response(response, output_tree);
+  }
+
+  /**
    * @brief Update client information.
    * @param response The HTTP response object.
    * @param request The HTTP request object.
@@ -1578,6 +1634,8 @@ namespace confighttp {
     server.resource["^/api/clients/update$"]["POST"] = updateClient;
     server.resource["^/api/clients/unpair$"]["POST"] = unpair;
     server.resource["^/api/clients/disconnect$"]["POST"] = disconnect;
+    server.resource["^/api/token$"]["POST"] = generateApiToken;
+    server.resource["^/api/token$"]["DELETE"] = revokeApiToken;
     server.resource["^/api/covers/upload$"]["POST"] = uploadCover;
     server.resource["^/images/apollo.ico$"]["GET"] = getFaviconImage;
     server.resource["^/images/logo-apollo-45.png$"]["GET"] = getApolloLogoImage;
