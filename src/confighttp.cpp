@@ -64,6 +64,12 @@ namespace confighttp {
   std::string sessionCookie;
   static std::chrono::time_point<std::chrono::steady_clock> cookie_creation_time;
 
+  // Paths a read-only API-key request may reach. GET-only; deliberately excludes
+  // /api/config and /api/logs (which can contain sensitive data).
+  const std::set<std::string> TOKEN_ALLOWED_PATHS {
+    "/api/clients/list",
+  };
+
   /**
    * @brief Log the request details.
    * @param request The HTTP request object.
@@ -177,6 +183,26 @@ namespace confighttp {
    * This function uses session cookies (if set) and ensures they have not expired.
    */
   bool authenticate(resp_https_t response, req_https_t request, bool needsRedirect = false) {
+    // Stateless API-key path (read-only). A Bearer token is the sole credential and
+    // is honored only on GET requests to an allowlisted path. Origin gating is
+    // intentionally bypassed: the token itself is the credential. A browser never
+    // sends an Authorization header, so this block is inert for the Web UI.
+    auto authHeader = request->header.find("authorization");
+    if (authHeader != request->header.end()) {
+      auto token = http::extract_bearer_token(authHeader->second);
+      if (!token.empty()) {
+        if (!config::sunshine.api_token.empty() &&
+            request->method == "GET" &&
+            TOKEN_ALLOWED_PATHS.count(request->path) &&
+            http::hash_api_token(token) == config::sunshine.api_token) {
+          return true;
+        }
+        // Present but invalid, out-of-scope, or on a non-GET method: reject outright.
+        send_unauthorized(response, request);
+        return false;
+      }
+    }
+
     if (!checkIPOrigin(response, request))
       return false;
     // If credentials not set, redirect to welcome.
