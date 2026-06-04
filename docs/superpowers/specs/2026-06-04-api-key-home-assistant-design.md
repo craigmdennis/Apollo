@@ -65,8 +65,12 @@ not a new data endpoint.
   used for session cookies).
 - **Stored hashed**, never in plaintext, in the existing credentials file
   (`config::sunshine.credentials_file`) as a new field `api_token`, computed as
-  `util::hex(crypto::hash(token + config::sunshine.salt))` — identical to how the
-  admin `password` is stored (`src/httpcommon.cpp:87`). Re-uses the existing `salt`.
+  `util::hex(crypto::hash(token))` — an **unsalted** SHA-256. The admin password is
+  salted (`src/httpcommon.cpp:87`) because it is low-entropy; an API key is 48 random
+  characters, so a salt adds nothing and would introduce a bug: `save_user_creds`
+  regenerates the shared `salt` on every password change (`src/httpcommon.cpp:84`),
+  which would silently invalidate a salt-coupled key. Unsalted hashing decouples the
+  key's lifetime from the password.
 - Loaded into a new `config::sunshine.api_token` (the hash; empty string = feature
   disabled) by `reload_user_creds()` (`src/httpcommon.cpp:118`).
 - The plaintext key is shown **once**, at generation time, in the web UI. A leaked
@@ -84,7 +88,7 @@ authenticate(response, request, needsRedirect=false):
        and request.path is in TOKEN_ALLOWED_PATHS
        and an "Authorization: Bearer <key>" header is present:
         if api_token configured
-           and constant_time_eq( hex(hash(key + salt)), config.api_token ):
+           and hex(hash(key)) == config.api_token:    # unsalted; matches cookie-path compare style
             return true            # authenticated; origin check intentionally bypassed
         else:
             send_unauthorized(); return false   # present-but-invalid key => 401, no fall-through
@@ -107,7 +111,9 @@ Key properties:
   authentication, so the key path does not call `checkIPOrigin()`. This is what fixes
   the LAN 403 without forcing the user to open the whole admin UI to the LAN. The
   browser/cookie path keeps its origin gating unchanged.
-- Constant-time comparison for the hash to avoid timing leaks.
+- The compared value is a SHA-256 hash (not the raw key), matching the existing
+  cookie-path comparison style (`src/confighttp.cpp:209`); a timing side-channel on a
+  hash comparison is not practically exploitable (would require a SHA-256 preimage).
 
 ### 3. Key management — one admin-only resource
 
@@ -171,8 +177,8 @@ Home Assistant ──GET /api/clients/list────────────�
   automation, read-only, and over HTTPS. **Documented future tightening:** redact
   `do`/`undo`/`perm` from the `/api/clients/list` response when the request was
   authenticated via API key.
-- Key stored hashed + salted, shown once. `confighttp` is HTTPS-only, so the Bearer
-  header is never sent in clear.
+- Key stored hashed (unsalted SHA-256; the key is high-entropy), shown once.
+  `confighttp` is HTTPS-only, so the Bearer header is never sent in clear.
 
 ## Testing
 
