@@ -497,7 +497,13 @@
     "new_creds": "New Credentials",
     "new_username_desc": "If not specified, the username will not change",
     "password_change": "Password Change",
-    "success_msg": "Password has been changed successfully! This page will reload soon, your browser will ask you for the new credentials."
+    "success_msg": "Password has been changed successfully! This page will reload soon, your browser will ask you for the new credentials.",
+    "api_access": "API Access",
+    "api_access_desc": "Generate a read-only API key for headless integrations (e.g. Home Assistant). The key can read the client list (which device is connected) but cannot change anything.",
+    "api_generate_key": "Generate API Key",
+    "api_revoke_key": "Revoke",
+    "api_key_once_warning": "Copy this key now — it will not be shown again.",
+    "api_key_copy": "Copy"
   },
   "permissions": {
     "input_controller": "Controller Input",
