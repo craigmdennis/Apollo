@@ -1639,6 +1639,7 @@ namespace confighttp {
     server.config.reuse_address = true;
     server.config.address = net::af_to_any_address_string(address_family);
     server.config.port = port_https;
+    server.config.max_request_streambuf_size = MAX_REQUEST_STREAMBUF_SIZE;
 
     auto accept_and_run = [&](auto *server) {
       try {
