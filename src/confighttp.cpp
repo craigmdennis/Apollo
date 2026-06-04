@@ -1251,7 +1251,17 @@ namespace confighttp {
    * @api_examples{/api/password| POST| {"currentUsername":"admin","currentPassword":"admin","newUsername":"admin","newPassword":"admin","confirmNewPassword":"admin"}}
    */
   void savePassword(resp_https_t response, req_https_t request) {
-    if ((!config::sunshine.username.empty() && !authenticate(response, request)) || !validateContentType(response, request, "application/json"))
+    // When an admin user is already configured, authenticate() enforces both origin
+    // gating (via checkIPOrigin) and session auth. During first-time setup the username
+    // is empty, so authenticate() would be skipped entirely; in that case still apply
+    // origin gating directly, matching login(). checkIPOrigin() writes a 403 on failure.
+    if (config::sunshine.username.empty()) {
+      if (!checkIPOrigin(response, request))
+        return;
+    } else if (!authenticate(response, request)) {
+      return;
+    }
+    if (!validateContentType(response, request, "application/json"))
       return;
     print_req(request);
     std::vector<std::string> errors;
