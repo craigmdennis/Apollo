@@ -8,6 +8,7 @@
 // standard includes
 #include <string>
 #include <chrono>
+#include <cstddef>
 #include <list>
 
 // lib includes
@@ -51,6 +52,11 @@ namespace nvhttp {
    * @brief The HTTPS port, as a difference from the config port.
    */
   constexpr auto PORT_HTTPS = -5;
+
+  // Maximum size of an HTTP request body the streaming server will buffer. Pairing /
+  // serverinfo / clipboard payloads are small, so cap tightly to bound memory use
+  // (the SimpleWeb default is SIZE_MAX).
+  constexpr std::size_t MAX_REQUEST_STREAMBUF_SIZE = 1 * 1024 * 1024;  // 1 MiB
 
   constexpr auto OTP_EXPIRE_DURATION = 180s;
 

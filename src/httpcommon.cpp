@@ -10,6 +10,7 @@
 #include <utility>
 
 // lib includes
+#include <boost/algorithm/string.hpp>
 #include <boost/asio/ssl/context.hpp>
 #include <boost/asio/ssl/context_base.hpp>
 #include <boost/property_tree/json_parser.hpp>
@@ -97,6 +98,76 @@ namespace http {
     return 0;
   }
 
+  int save_api_token(const std::string &file, const std::string &token_hash) {
+    nlohmann::json outputTree;
+    if (fs::exists(file)) {
+      try {
+        std::ifstream in(file);
+        in >> outputTree;
+      } catch (std::exception &e) {
+        BOOST_LOG(error) << "Couldn't read credentials file: "sv << e.what();
+        return -1;
+      }
+    }
+
+    if (token_hash.empty()) {
+      outputTree.erase("api_token");
+    } else {
+      outputTree["api_token"] = token_hash;
+    }
+
+    try {
+      std::ofstream out(file);
+      out << outputTree.dump(4);
+    } catch (std::exception &e) {
+      BOOST_LOG(error) << "error writing to the credentials file: "sv << e.what();
+      return -1;
+    }
+    return 0;
+  }
+
+  std::string hash_api_token(const std::string &token) {
+    return util::hex(crypto::hash(token)).to_string();
+  }
+
+  bool is_api_key_authorized(
+    const std::string &method,
+    const std::string &path,
+    const std::string &authorization_header,
+    const std::string &configured_token_hash,
+    const std::set<std::string> &allowed_paths
+  ) {
+    if (configured_token_hash.empty()) {
+      return false;  // feature disabled (no key configured)
+    }
+    if (method != "GET") {
+      return false;  // read-only: writes are never authorized by the key
+    }
+    if (!allowed_paths.count(path)) {
+      return false;  // out of the read-only scope
+    }
+    const std::string token = extract_bearer_token(authorization_header);
+    if (token.empty()) {
+      return false;  // no Bearer credential
+    }
+    return hash_api_token(token) == configured_token_hash;
+  }
+
+  std::string extract_bearer_token(const std::string &authorization_header) {
+    constexpr auto prefix = "bearer "sv;
+    if (authorization_header.size() <= prefix.size()) {
+      return "";
+    }
+    std::string scheme = authorization_header.substr(0, prefix.size());
+    boost::algorithm::to_lower(scheme);
+    if (scheme != prefix) {
+      return "";
+    }
+    std::string token = authorization_header.substr(prefix.size());
+    boost::algorithm::trim(token);
+    return token;
+  }
+
   bool user_creds_exist(const std::string &file) {
     if (!fs::exists(file)) {
       return false;
@@ -122,6 +193,8 @@ namespace http {
       config::sunshine.username = inputTree.get<std::string>("username");
       config::sunshine.password = inputTree.get<std::string>("password");
       config::sunshine.salt = inputTree.get<std::string>("salt");
+      // Optional: absent in credentials files written before the API-key feature.
+      config::sunshine.api_token = inputTree.get<std::string>("api_token", "");
     } catch (std::exception &e) {
       BOOST_LOG(error) << "loading user credentials: "sv << e.what();
       return -1;

@@ -64,6 +64,12 @@ namespace confighttp {
   std::string sessionCookie;
   static std::chrono::time_point<std::chrono::steady_clock> cookie_creation_time;
 
+  // Paths a read-only API-key request may reach. GET-only; deliberately excludes
+  // /api/config and /api/logs (which can contain sensitive data).
+  const std::set<std::string> TOKEN_ALLOWED_PATHS {
+    "/api/clients/list",
+  };
+
   /**
    * @brief Log the request details.
    * @param request The HTTP request object.
@@ -177,6 +183,21 @@ namespace confighttp {
    * This function uses session cookies (if set) and ensures they have not expired.
    */
   bool authenticate(resp_https_t response, req_https_t request, bool needsRedirect = false) {
+    // Stateless API-key path (read-only). A Bearer token is the sole credential and
+    // is honored only on GET requests to an allowlisted path. Origin gating is
+    // intentionally bypassed: the token itself is the credential. A browser never
+    // sends an Authorization header, so this block is inert for the Web UI.
+    auto authHeader = request->header.find("authorization");
+    if (authHeader != request->header.end() && !http::extract_bearer_token(authHeader->second).empty()) {
+      // A Bearer credential was presented; it is the sole credential for this request.
+      if (http::is_api_key_authorized(request->method, request->path, authHeader->second, config::sunshine.api_token, TOKEN_ALLOWED_PATHS)) {
+        return true;
+      }
+      // Present but invalid, out-of-scope, or on a non-GET method: reject outright.
+      send_unauthorized(response, request);
+      return false;
+    }
+
     if (!checkIPOrigin(response, request))
       return false;
     // If credentials not set, redirect to welcome.
@@ -870,9 +891,66 @@ namespace confighttp {
     nlohmann::json named_certs = nvhttp::get_all_clients();
     nlohmann::json output_tree;
     output_tree["named_certs"] = named_certs;
-#ifdef _WIN32
-    output_tree["platform"] = "windows";
-#endif
+    output_tree["platform"] = SUNSHINE_PLATFORM;
+    output_tree["status"] = true;
+    send_response(response, output_tree);
+  }
+
+  /**
+   * @brief Generate (or regenerate) the read-only API key.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   *
+   * Cookie/admin auth only (POST is never honored by the Bearer path, so a key cannot
+   * regenerate itself). Returns the plaintext key once; only its hash is stored.
+   *
+   * @api_examples{/api/token| POST| null}
+   */
+  void generateApiToken(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
+    // Restrict the key to alphanumerics so it is safe to carry in URLs, HTTP
+    // headers, shells and YAML (the default rand_alphabet includes !%&()=- which
+    // break those contexts). 48 chars over a 62-symbol alphabet is ~285 bits.
+    std::string token = crypto::rand_alphabet(48, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789");
+    std::string token_hash = http::hash_api_token(token);
+    if (http::save_api_token(config::sunshine.credentials_file, token_hash)) {
+      bad_request(response, request, "Failed to save API token");
+      return;
+    }
+    config::sunshine.api_token = token_hash;
+
+    nlohmann::json output_tree;
+    output_tree["status"] = true;
+    output_tree["token"] = token;  // shown once; not recoverable later
+    send_response(response, output_tree);
+  }
+
+  /**
+   * @brief Revoke the read-only API key.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   *
+   * @api_examples{/api/token| DELETE| null}
+   */
+  void revokeApiToken(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
+    if (http::save_api_token(config::sunshine.credentials_file, "")) {
+      bad_request(response, request, "Failed to revoke API token");
+      return;
+    }
+    config::sunshine.api_token = "";
+
+    nlohmann::json output_tree;
     output_tree["status"] = true;
     send_response(response, output_tree);
   }
@@ -1116,7 +1194,7 @@ namespace confighttp {
         }
       } else {
         auto data = SimpleWeb::Crypto::Base64::decode(input_tree.value("data", ""));
-        std::ofstream imgfile(path);
+        std::ofstream imgfile(path, std::ios::binary);
         imgfile.write(data.data(), static_cast<int>(data.size()));
       }
       output_tree["status"] = true;
@@ -1173,7 +1251,17 @@ namespace confighttp {
    * @api_examples{/api/password| POST| {"currentUsername":"admin","currentPassword":"admin","newUsername":"admin","newPassword":"admin","confirmNewPassword":"admin"}}
    */
   void savePassword(resp_https_t response, req_https_t request) {
-    if ((!config::sunshine.username.empty() && !authenticate(response, request)) || !validateContentType(response, request, "application/json"))
+    // When an admin user is already configured, authenticate() enforces both origin
+    // gating (via checkIPOrigin) and session auth. During first-time setup the username
+    // is empty, so authenticate() would be skipped entirely; in that case still apply
+    // origin gating directly, matching login(). checkIPOrigin() writes a 403 on failure.
+    if (config::sunshine.username.empty()) {
+      if (!checkIPOrigin(response, request))
+        return;
+    } else if (!authenticate(response, request)) {
+      return;
+    }
+    if (!validateContentType(response, request, "application/json"))
       return;
     print_req(request);
     std::vector<std::string> errors;
@@ -1487,8 +1575,12 @@ namespace confighttp {
       std::string sessionCookieRaw = crypto::rand_alphabet(64);
       sessionCookie = util::hex(crypto::hash(sessionCookieRaw + config::sunshine.salt)).to_string();
       cookie_creation_time = std::chrono::steady_clock::now();
+      // Derive Max-Age from SESSION_EXPIRE_DURATION so the cookie's browser lifetime stays
+      // consistent with the server-side session lifetime (single source of truth), and mark
+      // it HttpOnly so JavaScript (e.g. via XSS) cannot read the session token.
+      const auto cookieMaxAge = std::chrono::duration_cast<std::chrono::seconds>(SESSION_EXPIRE_DURATION).count();
       const SimpleWeb::CaseInsensitiveMultimap headers {
-        { "Set-Cookie", "auth=" + sessionCookieRaw + "; Secure; SameSite=Strict; Max-Age=2592000; Path=/" }
+        { "Set-Cookie", "auth=" + sessionCookieRaw + "; Secure; HttpOnly; SameSite=Strict; Max-Age=" + std::to_string(cookieMaxAge) + "; Path=/" }
       };
       response->write(headers);
       fg.disable();
@@ -1552,6 +1644,8 @@ namespace confighttp {
     server.resource["^/api/clients/update$"]["POST"] = updateClient;
     server.resource["^/api/clients/unpair$"]["POST"] = unpair;
     server.resource["^/api/clients/disconnect$"]["POST"] = disconnect;
+    server.resource["^/api/token$"]["POST"] = generateApiToken;
+    server.resource["^/api/token$"]["DELETE"] = revokeApiToken;
     server.resource["^/api/covers/upload$"]["POST"] = uploadCover;
     server.resource["^/images/apollo.ico$"]["GET"] = getFaviconImage;
     server.resource["^/images/logo-apollo-45.png$"]["GET"] = getApolloLogoImage;
@@ -1559,6 +1653,7 @@ namespace confighttp {
     server.config.reuse_address = true;
     server.config.address = net::af_to_any_address_string(address_family);
     server.config.port = port_https;
+    server.config.max_request_streambuf_size = MAX_REQUEST_STREAMBUF_SIZE;
 
     auto accept_and_run = [&](auto *server) {
       try {

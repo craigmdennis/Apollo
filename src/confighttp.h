@@ -7,6 +7,7 @@
 // standard includes
 #include <functional>
 #include <chrono>
+#include <cstddef>
 #include <string>
 
 // local includes
@@ -19,6 +20,10 @@ using namespace std::chrono_literals;
 namespace confighttp {
   constexpr auto PORT_HTTPS = 1;
   constexpr auto SESSION_EXPIRE_DURATION = 24h * 15;
+  // Maximum size of an HTTP request body the config server will buffer. Sized to fit a
+  // base64-encoded cover-art image (uploadCover) with headroom, while bounding the memory
+  // an unbounded request body could otherwise consume (the SimpleWeb default is SIZE_MAX).
+  constexpr std::size_t MAX_REQUEST_STREAMBUF_SIZE = 8 * 1024 * 1024;  // 8 MiB
   void start();
 }  // namespace confighttp
 

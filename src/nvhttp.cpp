@@ -1732,6 +1732,7 @@ namespace nvhttp {
     https_server.config.reuse_address = true;
     https_server.config.address = net::af_to_any_address_string(address_family);
     https_server.config.port = port_https;
+    https_server.config.max_request_streambuf_size = MAX_REQUEST_STREAMBUF_SIZE;
 
     http_server.default_resource["GET"] = not_found<SimpleWeb::HTTP>;
     http_server.resource["^/serverinfo$"]["GET"] = serverinfo<SimpleWeb::HTTP>;
@@ -1740,6 +1741,7 @@ namespace nvhttp {
     http_server.config.reuse_address = true;
     http_server.config.address = net::af_to_any_address_string(address_family);
     http_server.config.port = port_http;
+    http_server.config.max_request_streambuf_size = MAX_REQUEST_STREAMBUF_SIZE;
 
     auto accept_and_run = [&](auto *http_server) {
       try {
