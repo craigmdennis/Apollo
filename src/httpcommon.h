@@ -4,6 +4,10 @@
  */
 #pragma once
 
+// standard includes
+#include <set>
+#include <string>
+
 // lib includes
 #include <curl/curl.h>
 
@@ -49,6 +53,30 @@ namespace http {
    * @return 0 on success, -1 on error.
    */
   int save_api_token(const std::string &file, const std::string &token_hash);
+
+  /**
+   * @brief Decide whether a request may be authorized by the read-only API key.
+   *
+   * The key is read-only and least-privilege: it is honored only on GET requests to an
+   * allowlisted path, only when a key is configured, and only when the presented Bearer
+   * token hashes to the stored hash. This is the pure gating decision used by the
+   * config server's authenticate(); origin gating is bypassed by the caller because the
+   * key is itself the credential.
+   *
+   * @param method The HTTP method (e.g. "GET").
+   * @param path The request path (e.g. "/api/clients/list").
+   * @param authorization_header The raw Authorization header value.
+   * @param configured_token_hash The stored token hash; empty disables the key.
+   * @param allowed_paths The set of paths the key may reach.
+   * @return True if the request is authorized by the API key.
+   */
+  bool is_api_key_authorized(
+    const std::string &method,
+    const std::string &path,
+    const std::string &authorization_header,
+    const std::string &configured_token_hash,
+    const std::set<std::string> &allowed_paths
+  );
 
   extern std::string unique_id;
   extern uuid_util::uuid_t uuid;

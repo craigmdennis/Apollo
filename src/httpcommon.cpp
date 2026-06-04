@@ -130,6 +130,29 @@ namespace http {
     return util::hex(crypto::hash(token)).to_string();
   }
 
+  bool is_api_key_authorized(
+    const std::string &method,
+    const std::string &path,
+    const std::string &authorization_header,
+    const std::string &configured_token_hash,
+    const std::set<std::string> &allowed_paths
+  ) {
+    if (configured_token_hash.empty()) {
+      return false;  // feature disabled (no key configured)
+    }
+    if (method != "GET") {
+      return false;  // read-only: writes are never authorized by the key
+    }
+    if (!allowed_paths.count(path)) {
+      return false;  // out of the read-only scope
+    }
+    const std::string token = extract_bearer_token(authorization_header);
+    if (token.empty()) {
+      return false;  // no Bearer credential
+    }
+    return hash_api_token(token) == configured_token_hash;
+  }
+
   std::string extract_bearer_token(const std::string &authorization_header) {
     constexpr auto prefix = "bearer "sv;
     if (authorization_header.size() <= prefix.size()) {

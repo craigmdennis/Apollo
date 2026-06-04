@@ -8,6 +8,7 @@
 // standard imports
 #include <filesystem>
 #include <fstream>
+#include <set>
 
 // lib imports
 #include <curl/curl.h>
@@ -134,4 +135,31 @@ TEST(ApiTokenPersistence, SaveLoadRoundTrip) {
   ASSERT_EQ(config::sunshine.api_token, "");
 
   std::filesystem::remove(file);
+}
+
+// --- is_api_key_authorized (the read-only gating decision) ---
+TEST(IsApiKeyAuthorized, GatingContract) {
+  const std::set<std::string> allowed {"/api/clients/list"};
+  const std::string hash = http::hash_api_token("good-key");
+  const std::string good = "Bearer good-key";
+
+  // Authorized: configured key, GET, allowlisted path, matching token.
+  EXPECT_TRUE(http::is_api_key_authorized("GET", "/api/clients/list", good, hash, allowed));
+
+  // Disabled when no key is configured.
+  EXPECT_FALSE(http::is_api_key_authorized("GET", "/api/clients/list", good, "", allowed));
+
+  // Read-only: a non-GET method is never authorized, even with a valid key.
+  EXPECT_FALSE(http::is_api_key_authorized("POST", "/api/clients/list", good, hash, allowed));
+  EXPECT_FALSE(http::is_api_key_authorized("DELETE", "/api/clients/list", good, hash, allowed));
+
+  // Scope: a path that is not allowlisted is rejected (e.g. config/logs).
+  EXPECT_FALSE(http::is_api_key_authorized("GET", "/api/config", good, hash, allowed));
+
+  // Wrong key rejected.
+  EXPECT_FALSE(http::is_api_key_authorized("GET", "/api/clients/list", "Bearer wrong", hash, allowed));
+
+  // No Bearer credential rejected.
+  EXPECT_FALSE(http::is_api_key_authorized("GET", "/api/clients/list", "", hash, allowed));
+  EXPECT_FALSE(http::is_api_key_authorized("GET", "/api/clients/list", "Basic good-key", hash, allowed));
 }

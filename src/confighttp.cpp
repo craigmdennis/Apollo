@@ -188,19 +188,14 @@ namespace confighttp {
     // intentionally bypassed: the token itself is the credential. A browser never
     // sends an Authorization header, so this block is inert for the Web UI.
     auto authHeader = request->header.find("authorization");
-    if (authHeader != request->header.end()) {
-      auto token = http::extract_bearer_token(authHeader->second);
-      if (!token.empty()) {
-        if (!config::sunshine.api_token.empty() &&
-            request->method == "GET" &&
-            TOKEN_ALLOWED_PATHS.count(request->path) &&
-            http::hash_api_token(token) == config::sunshine.api_token) {
-          return true;
-        }
-        // Present but invalid, out-of-scope, or on a non-GET method: reject outright.
-        send_unauthorized(response, request);
-        return false;
+    if (authHeader != request->header.end() && !http::extract_bearer_token(authHeader->second).empty()) {
+      // A Bearer credential was presented; it is the sole credential for this request.
+      if (http::is_api_key_authorized(request->method, request->path, authHeader->second, config::sunshine.api_token, TOKEN_ALLOWED_PATHS)) {
+        return true;
       }
+      // Present but invalid, out-of-scope, or on a non-GET method: reject outright.
+      send_unauthorized(response, request);
+      return false;
     }
 
     if (!checkIPOrigin(response, request))
