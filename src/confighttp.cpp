@@ -891,9 +891,7 @@ namespace confighttp {
     nlohmann::json named_certs = nvhttp::get_all_clients();
     nlohmann::json output_tree;
     output_tree["named_certs"] = named_certs;
-#ifdef _WIN32
-    output_tree["platform"] = "windows";
-#endif
+    output_tree["platform"] = SUNSHINE_PLATFORM;
     output_tree["status"] = true;
     send_response(response, output_tree);
   }
