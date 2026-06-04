@@ -1194,7 +1194,7 @@ namespace confighttp {
         }
       } else {
         auto data = SimpleWeb::Crypto::Base64::decode(input_tree.value("data", ""));
-        std::ofstream imgfile(path);
+        std::ofstream imgfile(path, std::ios::binary);
         imgfile.write(data.data(), static_cast<int>(data.size()));
       }
       output_tree["status"] = true;
