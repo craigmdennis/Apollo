@@ -71,3 +71,40 @@ INSTANTIATE_TEST_SUITE_P(
     std::make_tuple(URL_2, "hello-redirect.txt")
   )
 );
+
+// --- hash_api_token ---
+TEST(HashApiToken, IsDeterministic) {
+  ASSERT_EQ(http::hash_api_token("my-secret-key"), http::hash_api_token("my-secret-key"));
+}
+
+TEST(HashApiToken, DiffersByInput) {
+  ASSERT_NE(http::hash_api_token("key-a"), http::hash_api_token("key-b"));
+}
+
+TEST(HashApiToken, IsSha256HexLength) {
+  // SHA-256 = 32 bytes = 64 hex chars
+  ASSERT_EQ(http::hash_api_token("anything").size(), 64u);
+}
+
+// --- extract_bearer_token ---
+struct ExtractBearerTokenTest: testing::TestWithParam<std::tuple<std::string, std::string>> {};
+
+TEST_P(ExtractBearerTokenTest, Run) {
+  const auto &[header, expected] = GetParam();
+  ASSERT_EQ(http::extract_bearer_token(header), expected);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+  ExtractBearerTokenTests,
+  ExtractBearerTokenTest,
+  testing::Values(
+    std::make_tuple("Bearer abc123", "abc123"),
+    std::make_tuple("bearer abc123", "abc123"),      // scheme is case-insensitive
+    std::make_tuple("BEARER abc123", "abc123"),
+    std::make_tuple("Bearer   abc123  ", "abc123"),  // surrounding whitespace trimmed
+    std::make_tuple("Basic abc123", ""),             // wrong scheme
+    std::make_tuple("Bearer ", ""),                  // empty token
+    std::make_tuple("Bearertoken", ""),              // no separator
+    std::make_tuple("", "")
+  )
+);

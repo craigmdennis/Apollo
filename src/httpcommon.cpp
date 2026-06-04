@@ -10,6 +10,7 @@
 #include <utility>
 
 // lib includes
+#include <boost/algorithm/string.hpp>
 #include <boost/asio/ssl/context.hpp>
 #include <boost/asio/ssl/context_base.hpp>
 #include <boost/property_tree/json_parser.hpp>
@@ -95,6 +96,25 @@ namespace http {
 
     BOOST_LOG(info) << "New credentials have been created"sv;
     return 0;
+  }
+
+  std::string hash_api_token(const std::string &token) {
+    return util::hex(crypto::hash(token)).to_string();
+  }
+
+  std::string extract_bearer_token(const std::string &authorization_header) {
+    constexpr auto prefix = "bearer "sv;
+    if (authorization_header.size() <= prefix.size()) {
+      return "";
+    }
+    std::string scheme = authorization_header.substr(0, prefix.size());
+    boost::algorithm::to_lower(scheme);
+    if (scheme != prefix) {
+      return "";
+    }
+    std::string token = authorization_header.substr(prefix.size());
+    boost::algorithm::trim(token);
+    return token;
   }
 
   bool user_creds_exist(const std::string &file) {
