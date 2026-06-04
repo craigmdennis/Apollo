@@ -108,24 +108,13 @@ TEST_P(PairingTest, Run) {
   input.session->serverchallenge = input.override_server_challenge;
 
   // phase 4
-  auto input_client_cert = input.session->client.cert;  // Will be moved
-  auto add_cert = std::make_shared<safe::queue_t<crypto::x509_t>>(30);
-  clientpairingsecret(*input.session, add_cert, tree, input.client_pairing_secret);
+  // NOTE: clientpairingsecret() previously took an `add_cert` queue and pushed the
+  // verified client certificate to it. Cert storage was later refactored to store the
+  // cert internally (nvhttp's client_root.named_devices, which is not exposed for
+  // inspection here), so the queue parameter was removed. root.paired now gates
+  // phase-4 success (it is only set after the cert is verified and stored).
+  clientpairingsecret(*input.session, tree, input.client_pairing_secret);
   ASSERT_EQ(tree.get<int>("root.paired") == 1, expected.phase_4_success);
-
-  // Check that we actually added the input client certificate to `add_cert`
-  if (expected.phase_4_success) {
-    ASSERT_EQ(add_cert->peek(), true);
-    auto cert = add_cert->pop();
-    char added_subject_name[256];
-    X509_NAME_oneline(X509_get_subject_name(cert.get()), added_subject_name, sizeof(added_subject_name));
-
-    auto input_cert = crypto::x509(input_client_cert);
-    char original_suject_name[256];
-    X509_NAME_oneline(X509_get_subject_name(input_cert.get()), original_suject_name, sizeof(original_suject_name));
-
-    ASSERT_EQ(std::string(added_subject_name), std::string(original_suject_name));
-  }
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -252,8 +241,7 @@ TEST(PairingTest, OutOfOrderCalls) {
   serverchallengeresp(sess, tree, "test");
   ASSERT_FALSE(tree.get<int>("root.paired") == 1);
 
-  auto add_cert = std::make_shared<safe::queue_t<crypto::x509_t>>(30);
-  clientpairingsecret(sess, add_cert, tree, "test");
+  clientpairingsecret(sess, tree, "test");
   ASSERT_FALSE(tree.get<int>("root.paired") == 1);
 
   // This should work, it's the first time we call it
