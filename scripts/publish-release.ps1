@@ -12,9 +12,9 @@
   GitHub CLI authenticated (gh auth login), clean git tree on the commit to release.
 
 .EXAMPLE
-  pwsh -File scripts/publish-release.ps1 -Version 0.5.0
+  powershell -File scripts\publish-release.ps1 -Version 0.5.0
 .EXAMPLE
-  pwsh -File scripts/publish-release.ps1 -Version 0.5.1 -Notes "Cookie + cover fixes"
+  powershell -File scripts\publish-release.ps1 -Version 0.5.1 -Notes "Cookie + cover fixes"
 #>
 [CmdletBinding()]
 param(
@@ -25,18 +25,25 @@ param(
   [string]$Notes    = "",
   [switch]$AllowDirty
 )
-$ErrorActionPreference = "Stop"
+
+# Native commands (git / gh / the MSYS2 cmd wrapper) legitimately write progress to
+# stderr; under EAP=Stop PowerShell would turn that into a terminating error. So run
+# with Continue and gate explicitly on $LASTEXITCODE / artifact checks instead.
+$ErrorActionPreference = "Continue"
+
 $Version = $Version.TrimStart('v','V')
 $tag = "v$Version"
 
 # --- preflight ---
-if (-not (Get-Command gh -ErrorAction SilentlyContinue)) { throw "gh not found; install GitHub CLI and 'gh auth login'." }
+if (-not (Get-Command gh -ErrorAction SilentlyContinue)) { throw "gh not found; install GitHub CLI and run 'gh auth login'." }
 if (-not (Test-Path $Msys2)) { throw "MSYS2 not found at $Msys2." }
-$repoRoot = (git rev-parse --show-toplevel).Trim()
-if (-not $repoRoot) { throw "Not inside a git repo." }
+
+$repoRoot = git rev-parse --show-toplevel
+if ($LASTEXITCODE -ne 0 -or -not $repoRoot) { throw "Not inside a git repo." }
+$repoRoot = $repoRoot.Trim()
+
 if (-not $AllowDirty -and (git status --porcelain)) { throw "Working tree not clean. Commit/stash first, or pass -AllowDirty." }
-git rev-parse $tag *> $null
-if ($LASTEXITCODE -eq 0) { throw "Tag $tag already exists. Bump -Version." }
+if (git tag --list $tag) { throw "Tag $tag already exists. Bump -Version." }
 
 $msysRoot = Split-Path $Msys2 -Parent
 $buildScript = Join-Path $msysRoot "tmp\apollo_release_build.sh"
@@ -55,21 +62,34 @@ ninja -C '$BuildDir'
 echo "=== package ==="
 cpack -G NSIS --config '$BuildDir/CPackConfig.cmake'
 "@
-Set-Content -Path $buildScript -Value ($bash -replace "`r`n","`n") -Encoding ascii -NoNewline
-Write-Host "Building Release v$Version (this can take a while on the first run)..."
-& $Msys2 -defterm -here -no-start -ucrt64 -c "bash /tmp/apollo_release_build.sh"
-if ($LASTEXITCODE -ne 0) { throw "Build/package failed (exit $LASTEXITCODE). See output above." }
+Set-Content -Path $buildScript -Value ($bash -replace "`r`n","`n") -Encoding ascii -NoNewline -ErrorAction Stop
 
 $installer = Join-Path $repoRoot "$BuildDir\cpack_artifacts\Apollo.exe"
-if (-not (Test-Path $installer)) { throw "Installer not found at $installer." }
+if (Test-Path $installer) { Remove-Item $installer -Force -ErrorAction Stop }  # so we can detect a fresh build
+
+Write-Host "Building Release v$Version (first run compiles Boost from source; later runs are incremental)..."
+$started = Get-Date
+& $Msys2 -defterm -here -no-start -ucrt64 -c "bash /tmp/apollo_release_build.sh"
+
+# The MSYS2 cmd wrapper does not reliably propagate the inner exit code, so verify by
+# the artifact being (re)created after we started.
+if (-not (Test-Path $installer) -or (Get-Item $installer).LastWriteTime -lt $started) {
+  throw "Build/package did not produce a fresh installer at $installer (see output above)."
+}
+
 $asset = Join-Path $repoRoot "$BuildDir\cpack_artifacts\Apollo-$tag.exe"
-Copy-Item $installer $asset -Force
+Copy-Item $installer $asset -Force -ErrorAction Stop
 Write-Host "Built installer: $asset ($([math]::Round((Get-Item $asset).Length/1MB,1)) MB)"
 
 # --- tag + push + release ---
 git tag $tag
+if ($LASTEXITCODE -ne 0) { throw "git tag $tag failed." }
 git push fork $tag
+if ($LASTEXITCODE -ne 0) { throw "git push of $tag failed." }
+
 if ([string]::IsNullOrWhiteSpace($Notes)) { $Notes = "Apollo $tag" }
 gh release create $tag --repo $Repo --title "Apollo $tag" --notes $Notes "$asset"
+if ($LASTEXITCODE -ne 0) { throw "gh release create failed (tag $tag was pushed; re-run just the gh release create, or delete the tag)." }
+
 Write-Host "Published release $tag with installer attached."
 Write-Host "On each machine run: scripts\update-apollo.ps1"
