@@ -1575,8 +1575,12 @@ namespace confighttp {
       std::string sessionCookieRaw = crypto::rand_alphabet(64);
       sessionCookie = util::hex(crypto::hash(sessionCookieRaw + config::sunshine.salt)).to_string();
       cookie_creation_time = std::chrono::steady_clock::now();
+      // Derive Max-Age from SESSION_EXPIRE_DURATION so the cookie's browser lifetime stays
+      // consistent with the server-side session lifetime (single source of truth), and mark
+      // it HttpOnly so JavaScript (e.g. via XSS) cannot read the session token.
+      const auto cookieMaxAge = std::chrono::duration_cast<std::chrono::seconds>(SESSION_EXPIRE_DURATION).count();
       const SimpleWeb::CaseInsensitiveMultimap headers {
-        { "Set-Cookie", "auth=" + sessionCookieRaw + "; Secure; SameSite=Strict; Max-Age=2592000; Path=/" }
+        { "Set-Cookie", "auth=" + sessionCookieRaw + "; Secure; HttpOnly; SameSite=Strict; Max-Age=" + std::to_string(cookieMaxAge) + "; Path=/" }
       };
       response->write(headers);
       fg.disable();
