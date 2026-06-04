@@ -98,6 +98,34 @@ namespace http {
     return 0;
   }
 
+  int save_api_token(const std::string &file, const std::string &token_hash) {
+    nlohmann::json outputTree;
+    if (fs::exists(file)) {
+      try {
+        std::ifstream in(file);
+        in >> outputTree;
+      } catch (std::exception &e) {
+        BOOST_LOG(error) << "Couldn't read credentials file: "sv << e.what();
+        return -1;
+      }
+    }
+
+    if (token_hash.empty()) {
+      outputTree.erase("api_token");
+    } else {
+      outputTree["api_token"] = token_hash;
+    }
+
+    try {
+      std::ofstream out(file);
+      out << outputTree.dump(4);
+    } catch (std::exception &e) {
+      BOOST_LOG(error) << "error writing to the credentials file: "sv << e.what();
+      return -1;
+    }
+    return 0;
+  }
+
   std::string hash_api_token(const std::string &token) {
     return util::hex(crypto::hash(token)).to_string();
   }
@@ -142,6 +170,8 @@ namespace http {
       config::sunshine.username = inputTree.get<std::string>("username");
       config::sunshine.password = inputTree.get<std::string>("password");
       config::sunshine.salt = inputTree.get<std::string>("salt");
+      // Optional: absent in credentials files written before the API-key feature.
+      config::sunshine.api_token = inputTree.get<std::string>("api_token", "");
     } catch (std::exception &e) {
       BOOST_LOG(error) << "loading user credentials: "sv << e.what();
       return -1;

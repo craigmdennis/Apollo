@@ -42,6 +42,14 @@ namespace http {
    */
   std::string extract_bearer_token(const std::string &authorization_header);
 
+  /**
+   * @brief Persist (or clear) the API token hash in the credentials file.
+   * @param file The credentials file path.
+   * @param token_hash The hash to store; pass "" to remove it.
+   * @return 0 on success, -1 on error.
+   */
+  int save_api_token(const std::string &file, const std::string &token_hash);
+
   extern std::string unique_id;
   extern uuid_util::uuid_t uuid;
   extern net::net_e origin_web_ui_allowed;

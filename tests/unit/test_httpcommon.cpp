@@ -5,10 +5,15 @@
 // test imports
 #include "../tests_common.h"
 
+// standard imports
+#include <filesystem>
+#include <fstream>
+
 // lib imports
 #include <curl/curl.h>
 
 // local imports
+#include <src/config.h>
 #include <src/httpcommon.h>
 
 struct UrlEscapeTest: testing::TestWithParam<std::tuple<std::string, std::string>> {};
@@ -108,3 +113,25 @@ INSTANTIATE_TEST_SUITE_P(
     std::make_tuple("", "")
   )
 );
+
+// --- API token persistence ---
+TEST(ApiTokenPersistence, SaveLoadRoundTrip) {
+  const std::string file = (std::filesystem::temp_directory_path() / "apollo_creds_test.json").string();
+  std::filesystem::remove(file);
+  // Seed a minimal creds file so save merges into existing JSON.
+  { std::ofstream o(file); o << R"({"username":"u","salt":"s","password":"p"})"; }
+
+  const std::string hash = http::hash_api_token("the-key");
+  ASSERT_EQ(http::save_api_token(file, hash), 0);
+
+  config::sunshine.api_token = "stale";
+  ASSERT_EQ(http::reload_user_creds(file), 0);
+  ASSERT_EQ(config::sunshine.api_token, hash);
+
+  // Clearing removes it; reload yields empty.
+  ASSERT_EQ(http::save_api_token(file, ""), 0);
+  ASSERT_EQ(http::reload_user_creds(file), 0);
+  ASSERT_EQ(config::sunshine.api_token, "");
+
+  std::filesystem::remove(file);
+}

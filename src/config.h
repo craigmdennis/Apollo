@@ -269,6 +269,7 @@ namespace config {
     std::string username;
     std::string password;
     std::string salt;
+    std::string api_token;  ///< Unsalted SHA-256 hash of the read-only API key; empty = disabled.
 
     std::string config_file;
 
