@@ -57,6 +57,26 @@ basic authentication with the admin username and password.
 ## POST /api/restart
 @copydoc confighttp::restart()
 
+## POST /api/token
+@copydoc confighttp::generateApiToken()
+
+## DELETE /api/token
+@copydoc confighttp::revokeApiToken()
+
+## Read-only API key (headless integrations)
+
+For headless clients such as Home Assistant, generate an API key on the Web UI's
+password page, then send it as a Bearer token:
+
+```bash
+curl -H "Authorization: Bearer <key>" https://<host>:47990/api/clients/list
+```
+
+The key is read-only: it is accepted only on `GET` requests to allowlisted paths
+(currently `/api/clients/list`) and bypasses the Web UI origin restriction, so it works
+from another LAN host without exposing the rest of the Web UI. Use the
+`named_certs[].connected` flags in the response to drive automations.
+
 <div class="section_buttons">
 
 | Previous                                    |                                  Next |
