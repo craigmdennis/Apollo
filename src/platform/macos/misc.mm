@@ -33,7 +33,7 @@
 
 using namespace std::literals;
 namespace fs = std::filesystem;
-namespace bp = boost::process;
+namespace bp = boost::process::v1;  // classic Process API moved to v1 in Boost >= 1.88
 
 namespace platf {
 
