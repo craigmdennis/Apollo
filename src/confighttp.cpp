@@ -915,7 +915,10 @@ namespace confighttp {
 
     print_req(request);
 
-    std::string token = crypto::rand_alphabet(48);
+    // Restrict the key to alphanumerics so it is safe to carry in URLs, HTTP
+    // headers, shells and YAML (the default rand_alphabet includes !%&()=- which
+    // break those contexts). 48 chars over a 62-symbol alphabet is ~285 bits.
+    std::string token = crypto::rand_alphabet(48, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789");
     std::string token_hash = http::hash_api_token(token);
     if (http::save_api_token(config::sunshine.credentials_file, token_hash)) {
       bad_request(response, request, "Failed to save API token");
