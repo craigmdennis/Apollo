@@ -56,3 +56,6 @@ package-lock.json
 # Python
 *.pyc
 venv/
+
+# Portfolio blog working area (local only, never committed)
+blog/

@@ -130,3 +130,28 @@ than hitting a bug — grant `Launch Apps` / `Mouse Input` / `Keyboard Input` in
 
 Authoritative docs are in `docs/` (`building.md`, `configuration.md`, `getting_started.md`,
 `troubleshooting.md`, etc.) and on the project Wiki. `docs/changelog.md` tracks releases.
+
+## Blog content capture
+
+This project is tracked for a portfolio blog post. Throughout sessions, maintain `blog/notes.md`.
+
+Log the user's thinking — not the assistant's process. Entries are about the user's decisions, questions, and changes, written from their perspective:
+- The user's key decisions and the reasoning behind them (especially where they rejected the obvious approach)
+- Questions the user asked, and what was at stake in them
+- Moments the user changed direction mid-build, and why
+- Trade-offs and constraints the user weighed; anything that changed how they think about the problem
+
+Do not log issues the assistant ran into — tool errors, debugging detours, bugs you fixed. This is the user's story. If a problem matters, capture the user's decision or question it triggered, not your struggle with it.
+
+Capture the thinking live — don't just reconstruct it afterwards. When the user makes a non-obvious decision, rejects an approach, changes direction, or asks a sharp question, treat it as a logworthy moment in the same turn. If they already explained their reasoning in the conversation, record it in their own words. If the reasoning is unstated, ask one short question to draw it out (what tipped the decision, what they were weighing, what worried them) and log their answer. Keep it low-friction: prompt only at genuine decision points, never mid-flow for trivia, and drop it the moment they'd rather not.
+
+**With every capture, also plan and present story beats.** Alongside logging the raw note, sketch the narrative beats it could become — the hook, the tension/wall, the turn or insight, the payoff — and show them to the user in the same turn. The note is the record; the beats are how it might read as a post. Keep them brief (a few bullets, not prose), group related captures into candidate post arcs, and frame everything from the user's perspective. The user explicitly asked for this on every capture.
+
+Format each entry as:
+
+```
+**YYYY-MM-DD — Short title**
+One to three sentences. Raw observations only — the `portfolio-content` skill turns them into prose.
+```
+
+Blog posts, images, and drafts go in `blog/`. This folder is gitignored — nothing in it is committed to the repo.
