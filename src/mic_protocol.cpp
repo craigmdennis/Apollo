@@ -3,7 +3,6 @@
  * @brief Definitions for the remote microphone wire protocol.
  */
 // standard includes
-#include <algorithm>
 #include <string>
 
 // lib includes
@@ -93,7 +92,10 @@ namespace mic::protocol {
 
     crypto::sha256_t proof {};
     unsigned int length = 0;
-    HMAC(EVP_sha256(), pin.data(), static_cast<int>(pin.size()), reinterpret_cast<const unsigned char *>(message.data()), message.size(), proof.data(), &length);
+    if (!HMAC(EVP_sha256(), pin.data(), static_cast<int>(pin.size()), reinterpret_cast<const unsigned char *>(message.data()), message.size(), proof.data(), &length)) {
+      // An all-zero proof must never be a valid answer.
+      RAND_bytes(proof.data(), static_cast<int>(proof.size()));
+    }
     return proof;
   }
 

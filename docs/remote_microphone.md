@@ -43,7 +43,7 @@ connected device disconnects immediately.
 ## Network
 
 Calliope sends audio to UDP port 48002 when Apollo uses the default base port. The port
-is the base port plus 13. Allow it through the Windows firewall for private networks.
+is the base port plus 13. The firewall rule that the Apollo installer adds already covers it.
 
 ## Home automation
 
@@ -57,3 +57,5 @@ API key can read it. See [API](api.md).
 | Apollo cannot find the Steam Streaming Microphone | Install Steam on the PC, then connect again |
 | Another program is blocking the Steam Streaming Microphone | Close Steam Remote Play or the program using the device, then connect again |
 | This host cannot receive a microphone | The PC runs Apollo on Linux or macOS. The microphone needs Apollo on Windows |
+| Apollo is still opening the microphone | The first connection installs the Steam driver, which takes several seconds. Connect again. The Apollo web UI does not respond during that time |
+| The PC lists the device, and Calliope still waits for the PIN | The pairing answer did not reach Calliope. Remove the device under Microphones, then pair again |

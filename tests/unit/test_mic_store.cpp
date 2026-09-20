@@ -51,6 +51,18 @@ TEST_F(MicStore, RoundTripsDevicesAndPreviousDefault) {
   EXPECT_EQ(reloaded.previous_default_capture, "{device-id}");
 }
 
+TEST_F(MicStore, SavesOverAnExistingFile) {
+  mic::store_t store {file};
+  store.add("A", "uuid-a", "token-a");
+  ASSERT_TRUE(store.save());
+  store.add("B", "uuid-b", "token-b");
+  ASSERT_TRUE(store.save());
+
+  mic::store_t reloaded {file};
+  ASSERT_TRUE(reloaded.load());
+  EXPECT_EQ(reloaded.devices().size(), 2u);
+}
+
 TEST_F(MicStore, AuthorizesOnlyTheMatchingToken) {
   mic::store_t store {file};
   store.add("MacBook Pro", "uuid-2", "token-two");

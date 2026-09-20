@@ -52,8 +52,11 @@ namespace mic {
     constexpr auto HOUSEKEEPING = 1s;
     constexpr auto SESSION_TIMEOUT = 5s;
     constexpr auto REPLACED_LIFETIME = 5s;
-    // Opening the virtual microphone can install a driver, which takes several seconds.
-    constexpr auto SESSION_START_TIMEOUT = 30s;
+    // Opening the virtual microphone can install a driver, which takes several seconds. The
+    // config server has one thread, so this wait also freezes the web UI. Keep it short.
+    constexpr auto SESSION_START_TIMEOUT = 10s;
+    // Any LAN host can ask to pair, so the tray notice is limited to one per interval.
+    constexpr auto PAIR_NOTICE_INTERVAL = 30s;
 
     struct session_t {
       std::uint32_t id;
@@ -89,6 +92,7 @@ namespace mic {
     std::shared_ptr<asio::io_context> io;
     std::thread thread;
     bool stopped = false;  ///< Set once by stop(). The mic thread never starts again.
+    std::optional<steady::time_point> last_pair_notice;
 
     std::atomic<bool> running {false};
 
@@ -116,13 +120,13 @@ namespace mic {
       std::string text;
       switch (error_code) {
         case protocol::error_e::device_missing:
-          text = "Apollo cannot find the Steam Streaming Microphone. Install Steam on the PC, then tap Connect.";
+          text = "Apollo cannot find the Steam Streaming Microphone. Install Steam on this PC, then connect again from Calliope.";
           break;
         case protocol::error_e::device_open_failed:
-          text = "Another program on the PC is blocking the Steam Streaming Microphone. Close it, then tap Connect.";
+          text = "Another program on this PC is blocking the Steam Streaming Microphone. Close it, then connect again from Calliope.";
           break;
         case protocol::error_e::decode_failed:
-          text = "Apollo cannot decode the audio from this device. Tap Disconnect, then tap Connect.";
+          text = "Apollo cannot decode the audio from the microphone device. Disconnect and connect again in Calliope.";
           break;
         default:
           return;
@@ -385,7 +389,12 @@ namespace mic {
       }
 
       // A session must not outlive its thread: nothing would time it out or restore the device.
-      end_session("the mic thread stopped", false);
+      // A throw here would terminate Apollo, and a live stream with it.
+      try {
+        end_session("the mic thread stopped", false);
+      } catch (const std::exception &e) {
+        BOOST_LOG(error) << "Remote microphone: could not end the session cleanly: "sv << e.what();
+      }
       timer.reset();
       socket.reset();
       // Last statement. ensure_thread() joins this thread while it holds state_mutex, and
@@ -431,28 +440,35 @@ namespace mic {
   void start() {
     std::lock_guard lock {state_mutex};
 
+    // The store exists before anything that can throw, because every handler dereferences it.
     auto file = std::filesystem::path {config::nvhttp.file_state}.parent_path() / "mic_state.json";
     store = std::make_unique<store_t>(file);
-    if (!store->load()) {
-      BOOST_LOG(error) << "Remote microphone: could not read "sv << file.string() << ". No microphone is paired. The next pairing replaces the file."sv;
-    }
 
-    if (auto value = protocol::cert_fingerprint(file_handler::read_file(config::nvhttp.cert.c_str()))) {
-      fingerprint = *value;
-    } else {
-      BOOST_LOG(error) << "Remote microphone: could not read the host certificate. Pairing a microphone fails until Apollo restarts with a readable certificate."sv;
-    }
+    // This runs on Apollo's startup path. A microphone problem must never stop Apollo from starting.
+    try {
+      if (!store->load()) {
+        BOOST_LOG(error) << "Remote microphone: could not read "sv << file.string() << ". No microphone is paired. The next pairing replaces the file."sv;
+      }
 
-    if (!store->previous_default_capture.empty()) {
-      BOOST_LOG(info) << "Remote microphone: restoring the default capture device after an unclean exit"sv;
-      platf::restore_default_capture(store->previous_default_capture);
-      store->previous_default_capture.clear();
-      save_store();
-    }
+      if (auto value = protocol::cert_fingerprint(file_handler::read_file(config::nvhttp.cert.c_str()))) {
+        fingerprint = *value;
+      } else {
+        BOOST_LOG(error) << "Remote microphone: could not read the host certificate. Pairing a microphone fails until Apollo restarts with a readable certificate."sv;
+      }
 
-    // Inert until a mic device is paired: no thread and no socket.
-    if (!store->devices().empty()) {
-      ensure_thread();
+      if (!store->previous_default_capture.empty()) {
+        BOOST_LOG(info) << "Remote microphone: restoring the default capture device after an unclean exit"sv;
+        platf::restore_default_capture(store->previous_default_capture);
+        store->previous_default_capture.clear();
+        save_store();
+      }
+
+      // Inert until a mic device is paired: no thread and no socket.
+      if (!store->devices().empty()) {
+        ensure_thread();
+      }
+    } catch (const std::exception &e) {
+      BOOST_LOG(error) << "Remote microphone: startup failed, the remote microphone is unavailable: "sv << e.what();
     }
   }
 
@@ -464,11 +480,10 @@ namespace mic {
       context = io;
     }
 
-    if (context && running) {
-      asio::post(*context, [context]() {
-        end_session("Apollo is closing", false);
-        context->stop();
-      });
+    if (context) {
+      // run() ends the session on its way out. No handler is posted here: a handler that
+      // holds the io_context it is queued in keeps that io_context alive when it never runs.
+      context->stop();
     }
     if (thread.joinable()) {
       thread.join();
@@ -483,12 +498,18 @@ namespace mic {
 
   std::optional<std::string> pair_request(const std::string &address, const std::string &name, const std::string &nonce, const crypto::sha256_t &proof) {
     std::optional<std::string> request_id;
+    bool notify = false;
     {
       std::lock_guard lock {state_mutex};
-      request_id = pairing.request(address, name, nonce, proof, steady::now());
+      auto now = steady::now();
+      request_id = pairing.request(address, name, nonce, proof, now);
+      if (request_id && (!last_pair_notice || now - *last_pair_notice >= PAIR_NOTICE_INTERVAL)) {
+        last_pair_notice = now;
+        notify = true;
+      }
     }
 #if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
-    if (request_id) {
+    if (notify) {
       system_tray::update_tray_mic_pair_request();
     }
 #endif
@@ -584,7 +605,8 @@ namespace mic {
 
     try {
       if (result.wait_for(SESSION_START_TIMEOUT) != std::future_status::ready) {
-        return session_error_e::failed;
+        // The handler can still run later. That session ends itself after 5 seconds with no packet.
+        return session_error_e::busy;
       }
       return result.get();
     } catch (const std::future_error &) {

@@ -94,7 +94,7 @@ curl -H "Authorization: Bearer <key>" https://<host>:47990/api/clients/list
 ```
 
 The key is read-only: it is accepted only on `GET` requests to allowlisted paths
-(currently `/api/clients/list`) and bypasses the Web UI origin restriction, so it works
+(currently `/api/clients/list` and `/api/mic/list`) and bypasses the Web UI origin restriction, so it works
 from another LAN host without exposing the rest of the Web UI. Use the
 `named_certs[].connected` flags in the response to drive automations.
 

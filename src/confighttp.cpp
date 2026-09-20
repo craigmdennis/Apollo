@@ -1815,6 +1815,8 @@ namespace confighttp {
     if (auto failure = std::get_if<mic::session_error_e>(&result)) {
       if (*failure == mic::session_error_e::unsupported) {
         mic_error(response, SimpleWeb::StatusCode::server_error_not_implemented, "This host cannot receive a microphone");
+      } else if (*failure == mic::session_error_e::busy) {
+        mic_error(response, SimpleWeb::StatusCode::server_error_service_unavailable, "Apollo is still opening the microphone. Try again in a few seconds.");
       } else {
         mic_error(response, SimpleWeb::StatusCode::server_error_internal_server_error, "Could not start a mic session");
       }

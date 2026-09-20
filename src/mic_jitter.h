@@ -34,7 +34,7 @@ namespace mic {
     bool push(std::uint32_t sequence, std::vector<std::uint8_t> payload);
 
     /**
-     * @brief Take the next frame. Call once per 20 ms.
+     * @brief Take the next frame. The caller sets the pace: the render thread calls this when the device has room.
      */
     pop_result_t pop();
 

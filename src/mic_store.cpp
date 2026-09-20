@@ -65,6 +65,11 @@ namespace mic {
 
     std::error_code ec;
     std::filesystem::rename(temp, _file, ec);
+    if (ec) {
+      // Some Windows toolchains refuse to rename over an existing file.
+      std::filesystem::remove(_file, ec);
+      std::filesystem::rename(temp, _file, ec);
+    }
     return !ec;
   }
 

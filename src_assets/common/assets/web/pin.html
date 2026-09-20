@@ -492,6 +492,9 @@
           .then((response) => response.json())
           .then((response) => {
             this.mics = response.status && response.named_mics ? response.named_mics : [];
+          })
+          .catch(() => {
+            this.mics = [];
           });
       },
       editHost() {

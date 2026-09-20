@@ -21,6 +21,7 @@
 namespace mic {
   enum class session_error_e {
     unsupported,  ///< This host platform has no virtual microphone
+    busy,  ///< The mic thread did not answer in time. The caller retries.
     failed
   };
 

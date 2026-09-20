@@ -168,7 +168,9 @@ namespace platf {
       }
 
       WCHAR driver_path[MAX_PATH] = {};
-      ExpandEnvironmentStringsW(STEAM_MIC_DRIVER_PATH, driver_path, ARRAYSIZE(driver_path));
+      if (!ExpandEnvironmentStringsW(STEAM_MIC_DRIVER_PATH, driver_path, ARRAYSIZE(driver_path))) {
+        return false;
+      }
       if (!fn_DiInstallDriverW(nullptr, driver_path, 0, nullptr)) {
         auto code = GetLastError();
         switch (code) {
@@ -467,8 +469,11 @@ namespace platf {
           pending.erase(pending.begin(), pending.begin() + frames);
 
           status = render_client->ReleaseBuffer(frames, 0);
-          if (FAILED(status) && !recover(status)) {
-            break;
+          if (FAILED(status)) {
+            if (!recover(status)) {
+              break;
+            }
+            pending.clear();
           }
         }
 
