@@ -87,6 +87,8 @@ set(SUNSHINE_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/confighttp.h"
         "${CMAKE_SOURCE_DIR}/src/mic_protocol.cpp"
         "${CMAKE_SOURCE_DIR}/src/mic_protocol.h"
+        "${CMAKE_SOURCE_DIR}/src/mic_jitter.cpp"
+        "${CMAKE_SOURCE_DIR}/src/mic_jitter.h"
         "${CMAKE_SOURCE_DIR}/src/rtsp.cpp"
         "${CMAKE_SOURCE_DIR}/src/rtsp.h"
         "${CMAKE_SOURCE_DIR}/src/stream.cpp"
