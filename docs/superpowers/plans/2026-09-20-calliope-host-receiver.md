@@ -1761,6 +1761,9 @@ Design evidence is in `docs/superpowers/research/2026-09-20-windows-virtual-mic.
 - **Forced endpoint format.** The Steam driver copies audio from its render endpoint to its capture endpoint with no conversion. Both endpoints are set to 2 channels, 32-bit PCM, 48000 Hz through `IPolicyConfig::SetDeviceFormat`. A mismatch between the two produces garbled voice. The device format uses `KSDATAFORMAT_SUBTYPE_PCM`, because the float subtype makes `Initialize` fail with `0x88890008`. The stream format is float.
 - **200 ms device buffer, primed with silence.** A 100 ms buffer underruns at a 20 ms packet cadence. Half the buffer is filled with silence before `Start()`.
 - **Recovery.** `AUDCLNT_E_DEVICE_INVALIDATED`, `AUDCLNT_E_RESOURCES_INVALIDATED`, and `AUDCLNT_E_SERVICE_NOT_RUNNING` reopen the client, and queued audio from before the reopen is discarded.
+- **Thread contract.** The object is created and destroyed on one thread, which is no single-threaded COM apartment. `init()` refuses `RPC_E_CHANGED_MODE`, and the destructor logs a destroy on a foreign thread. The mic module uses the mic thread for both.
+- **Self-sufficient GUIDs.** The file defines `INITGUID` before its includes, as `src/platform/windows/audio.cpp` does. MinGW-w64 `DEFINE_GUID` only declares a GUID without it. `Audioclient.h` already includes `ksmedia.h`.
+- **Previous default first.** The default capture device is read before the driver install, because the install can make Windows promote the new device.
 - **Parameter name.** The factory's out-parameter is `error_out`. A parameter named `error` hides Apollo's Boost.Log `error` logger and breaks `BOOST_LOG(error)`.
 
 The device lookup, the format normalisation, and the render loop are adapted from Apollo pull request #1428, which is GPL-3.0 like Apollo.
@@ -1781,6 +1784,8 @@ After the closing brace of `class mic_t` and before `class audio_control_t`, add
    * @return The number of samples written, or 0 when nothing is ready to play.
    *
    * Called only from the virtual microphone's render thread.
+   * The callback can run until the virtual microphone's destructor returns, so everything it
+   * captures must outlive that destructor.
    */
   using virtual_mic_fill_t = std::function<std::size_t(float *mono_out, std::size_t capacity)>;
 
@@ -1789,6 +1794,8 @@ After the closing brace of `class mic_t` and before `class audio_control_t`, add
    *
    * On Windows this is the Steam Streaming Microphone. Creating one makes it the default
    * capture device. Destroying it stops the render thread and restores the previous default.
+   * Create and destroy the object on the same thread. That thread must not be a single-threaded
+   * COM apartment on Windows.
    */
   class virtual_mic_t {
   public:
@@ -1815,6 +1822,8 @@ After the closing brace of `class mic_t` and before `class audio_control_t`, add
   /**
    * @brief Open the virtual microphone on the calling thread and start pulling audio from fill.
    * @param error_out Receives the reason when the result is null.
+   *
+   * Can block for several seconds when the driver is installed.
    */
   std::unique_ptr<virtual_mic_t> virtual_mic(virtual_mic_fill_t fill, virtual_mic_error_e &error_out);
 
@@ -1854,6 +1863,7 @@ Create `src/platform/windows/mic_write.cpp`:
  * Design evidence: docs/superpowers/research/2026-09-20-windows-virtual-mic.md and
  * docs/superpowers/research/2026-09-20-voice-playout.md.
  */
+#define INITGUID
 // standard includes
 #include <algorithm>
 #include <atomic>
@@ -1864,7 +1874,6 @@ Create `src/platform/windows/mic_write.cpp`:
 
 // platform includes
 #include <Audioclient.h>
-#include <ksmedia.h>
 #include <mmdeviceapi.h>
 #include <newdev.h>
 #include <synchapi.h>
@@ -1996,6 +2005,9 @@ namespace platf {
       if (!config::audio.install_steam_drivers) {
         return false;
       }
+      if (!*STEAM_MIC_DRIVER_PATH) {
+        return false;
+      }
 
       // MinGW's libnewdev.a is missing DiInstallDriverW(), so it is loaded at runtime.
       auto newdev = LoadLibraryExW(L"newdev.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
@@ -2109,6 +2121,9 @@ namespace platf {
       }
 
       ~wasapi_virtual_mic_t() override {
+        if (owner != std::thread::id {} && std::this_thread::get_id() != owner) {
+          BOOST_LOG(error) << "Remote microphone: the virtual microphone was destroyed on a different thread from the one that created it. The default capture device may not be restored."sv;
+        }
         stop = true;
         if (render_thread.joinable()) {
           render_thread.join();
@@ -2127,13 +2142,23 @@ namespace platf {
       }
 
       bool init(virtual_mic_error_e &error_out) {
-        com_initialized = SUCCEEDED(CoInitializeEx(nullptr, COINIT_MULTITHREADED | COINIT_SPEED_OVER_MEMORY));
+        owner = std::this_thread::get_id();
+
+        auto com_status = CoInitializeEx(nullptr, COINIT_MULTITHREADED | COINIT_SPEED_OVER_MEMORY);
+        if (com_status == RPC_E_CHANGED_MODE) {
+          BOOST_LOG(error) << "Remote microphone: the virtual microphone must be created on a thread that is not a single-threaded COM apartment"sv;
+          error_out = virtual_mic_error_e::device_open_failed;
+          return false;
+        }
+        com_initialized = SUCCEEDED(com_status);
 
         device_enum = create_enumerator();
         if (!device_enum) {
           error_out = virtual_mic_error_e::device_open_failed;
           return false;
         }
+
+        previous_default = default_capture_id(device_enum.get());
 
         auto found_render = find_steam_endpoint(device_enum.get(), eRender);
         if (!found_render && install_steam_mic_driver()) {
@@ -2158,7 +2183,6 @@ namespace platf {
           return false;
         }
 
-        previous_default = default_capture_id(device_enum.get());
         if (previous_default == *found_capture) {
           // A stale switch is already in place. Keeping it as "previous" would make the restore a no-op forever.
           previous_default.clear();
@@ -2264,6 +2288,7 @@ namespace platf {
 
           while (padding + pending.size() < TARGET_QUEUED_FRAMES) {
             auto samples = fill(packet.data(), packet.size());
+            samples = std::min(samples, packet.size());
             if (samples == 0) {
               break;
             }
@@ -2279,11 +2304,14 @@ namespace platf {
 
           BYTE *buffer = nullptr;
           status = render_client->GetBuffer(frames, &buffer);
-          if (FAILED(status) || !buffer) {
+          if (FAILED(status)) {
             if (!recover(status)) {
               break;
             }
             pending.clear();
+            continue;
+          }
+          if (!buffer) {
             continue;
           }
 
@@ -2316,6 +2344,7 @@ namespace platf {
       std::thread render_thread;
       std::atomic<bool> stop {false};
       std::atomic<bool> failed {false};
+      std::thread::id owner;
     };
   }  // namespace
 
@@ -2364,7 +2393,7 @@ On the Windows PC, the operator pulls the branch and runs:
 cmake -B cmake-build-mic -G Ninja -S . -DBUILD_TESTS=ON && ninja -C cmake-build-mic
 ```
 
-Expected: the build completes. `mic_write.cpp` compiles with no error. When `CLSID_MMDeviceEnumerator` or `KSDATAFORMAT_SUBTYPE_IEEE_FLOAT` is reported as undefined at link time, add `#define INITGUID` as the first line of `mic_write.cpp` and rebuild.
+Expected: the build completes. `mic_write.cpp` compiles and links with no error.
 
 - [ ] **Step 7: Commit**
 
