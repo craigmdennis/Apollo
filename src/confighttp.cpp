@@ -33,6 +33,7 @@
 #include "globals.h"
 #include "httpcommon.h"
 #include "logging.h"
+#include "mic.h"
 #include "network.h"
 #include "nvhttp.h"
 #include "platform/common.h"
@@ -68,6 +69,7 @@ namespace confighttp {
   // /api/config and /api/logs (which can contain sensitive data).
   const std::set<std::string> TOKEN_ALLOWED_PATHS {
     "/api/clients/list",
+    "/api/mic/list",
   };
 
   /**
@@ -174,6 +176,22 @@ namespace confighttp {
   }
 
   /**
+   * @brief Origin rule for the endpoints that Calliope calls without a credential.
+   *
+   * Accepts localhost and LAN addresses whatever origin_web_ui_allowed holds, because a mic
+   * device is always on the LAN. Rejects WAN addresses.
+   */
+  bool checkMicOrigin(resp_https_t response, req_https_t request) {
+    auto address = net::addr_to_normalized_string(request->remote_endpoint().address());
+    if (net::from_address(address) > net::LAN) {
+      BOOST_LOG(info) << "Remote microphone: ["sv << address << "] -- denied"sv;
+      response->write(SimpleWeb::StatusCode::client_error_forbidden);
+      return false;
+    }
+    return true;
+  }
+
+  /**
    * @brief Authenticate the request.
    * @param response The HTTP response object.
    * @param request The HTTP request object.
@@ -269,6 +287,35 @@ namespace confighttp {
     headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
 
     response->write(code, tree.dump(), headers);
+  }
+
+  /**
+   * @brief Send a JSON error with a specific status code.
+   */
+  void mic_error(resp_https_t response, SimpleWeb::StatusCode code, const std::string &error_message) {
+    nlohmann::json tree;
+    tree["status_code"] = static_cast<int>(code);
+    tree["status"] = false;
+    tree["error"] = error_message;
+    SimpleWeb::CaseInsensitiveMultimap headers;
+    headers.emplace("Content-Type", "application/json");
+    headers.emplace("X-Frame-Options", "DENY");
+    headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
+    response->write(code, tree.dump(), headers);
+  }
+
+  /**
+   * @brief Authenticate a request by mic token. The token is the sole credential, so the origin check is skipped.
+   */
+  std::optional<mic::device_t> authenticateMic(resp_https_t response, req_https_t request) {
+    auto header = request->header.find("authorization");
+    if (header != request->header.end()) {
+      if (auto device = mic::authorize(http::extract_bearer_token(header->second))) {
+        return device;
+      }
+    }
+    send_unauthorized(response, request);
+    return std::nullopt;
   }
 
 
@@ -1594,6 +1641,217 @@ namespace confighttp {
   }
 
   /**
+   * @brief Start a remote microphone pairing. Called by Calliope.
+   *
+   * @api_examples{/api/mic/pair| POST| {"name":"iPhone","nonce":"<base64>","proof":"<base64>"}}
+   */
+  void micPair(resp_https_t response, req_https_t request) {
+    if (!checkMicOrigin(response, request) || !validateContentType(response, request, "application/json")) {
+      return;
+    }
+
+    print_req(request);
+
+    try {
+      std::stringstream ss;
+      ss << request->content.rdbuf();
+      auto input_tree = nlohmann::json::parse(ss.str());
+      std::string name = input_tree.value("name", "");
+      auto nonce = SimpleWeb::Crypto::Base64::decode(input_tree.value("nonce", ""));
+      auto proof_bytes = SimpleWeb::Crypto::Base64::decode(input_tree.value("proof", ""));
+
+      crypto::sha256_t proof;
+      if (name.empty() || name.size() > 64 || nonce.size() != 16 || proof_bytes.size() != proof.size()) {
+        bad_request(response, request, "Invalid pairing request");
+        return;
+      }
+      std::copy(proof_bytes.begin(), proof_bytes.end(), proof.begin());
+
+      auto address = net::addr_to_normalized_string(request->remote_endpoint().address());
+      auto request_id = mic::pair_request(address, name, nonce, proof);
+      if (!request_id) {
+        mic_error(response, SimpleWeb::StatusCode::client_error_too_many_requests, "Too many pending pairing requests");
+        return;
+      }
+
+      nlohmann::json output_tree;
+      output_tree["status"] = true;
+      output_tree["request_id"] = *request_id;
+      send_response(response, output_tree);
+    } catch (std::exception &e) {
+      BOOST_LOG(warning) << "MicPair: "sv << e.what();
+      bad_request(response, request, e.what());
+    }
+  }
+
+  /**
+   * @brief Poll a remote microphone pairing. Returns the mic token once.
+   *
+   * @api_examples{/api/mic/pair/status| POST| {"request_id":"<id>"}}
+   */
+  void micPairStatus(resp_https_t response, req_https_t request) {
+    if (!checkMicOrigin(response, request) || !validateContentType(response, request, "application/json")) {
+      return;
+    }
+
+    print_req(request);
+
+    try {
+      std::stringstream ss;
+      ss << request->content.rdbuf();
+      auto input_tree = nlohmann::json::parse(ss.str());
+      auto status = mic::pair_status(input_tree.value("request_id", ""));
+
+      nlohmann::json output_tree;
+      output_tree["status"] = true;
+      switch (status.state) {
+        case mic::pairing_t::state_e::pending:
+          output_tree["state"] = "pending";
+          break;
+        case mic::pairing_t::state_e::paired:
+          output_tree["state"] = "paired";
+          output_tree["uuid"] = status.uuid;
+          output_tree["token"] = status.token;
+          output_tree["name"] = status.name;
+          break;
+        case mic::pairing_t::state_e::expired:
+          output_tree["state"] = "expired";
+          break;
+      }
+      send_response(response, output_tree);
+    } catch (std::exception &e) {
+      BOOST_LOG(warning) << "MicPairStatus: "sv << e.what();
+      bad_request(response, request, e.what());
+    }
+  }
+
+  /**
+   * @brief Submit the PIN shown by Calliope. Called by the web UI.
+   *
+   * @api_examples{/api/mic/pin| POST| {"pin":"1234","name":"Living room iPhone"}}
+   */
+  void micPin(resp_https_t response, req_https_t request) {
+    if (!validateContentType(response, request, "application/json") || !authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
+    try {
+      std::stringstream ss;
+      ss << request->content.rdbuf();
+      auto input_tree = nlohmann::json::parse(ss.str());
+      auto name = mic::submit_pin(input_tree.value("pin", ""), input_tree.value("name", ""));
+
+      nlohmann::json output_tree;
+      output_tree["status"] = name.has_value();
+      if (name) {
+        output_tree["name"] = *name;
+      }
+      send_response(response, output_tree);
+    } catch (std::exception &e) {
+      BOOST_LOG(warning) << "MicPin: "sv << e.what();
+      bad_request(response, request, e.what());
+    }
+  }
+
+  /**
+   * @brief List paired remote microphones. Readable with the read-only API key.
+   *
+   * @api_examples{/api/mic/list| GET| null}
+   */
+  void micList(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
+    nlohmann::json output_tree;
+    output_tree["status"] = true;
+    output_tree["named_mics"] = mic::list();
+    send_response(response, output_tree);
+  }
+
+  /**
+   * @brief Remove one paired remote microphone. Ends its mic session when it is connected.
+   *
+   * @api_examples{/api/mic/remove| POST| {"uuid":"<uuid>"}}
+   */
+  void micRemove(resp_https_t response, req_https_t request) {
+    if (!validateContentType(response, request, "application/json") || !authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
+    try {
+      std::stringstream ss;
+      ss << request->content.rdbuf();
+      auto input_tree = nlohmann::json::parse(ss.str());
+
+      nlohmann::json output_tree;
+      output_tree["status"] = mic::remove(input_tree.value("uuid", ""));
+      send_response(response, output_tree);
+    } catch (std::exception &e) {
+      BOOST_LOG(warning) << "MicRemove: "sv << e.what();
+      bad_request(response, request, e.what());
+    }
+  }
+
+  /**
+   * @brief Start a mic session. Authenticated by mic token.
+   *
+   * @api_examples{/api/mic/session| POST| null}
+   */
+  void micSessionStart(resp_https_t response, req_https_t request) {
+    auto device = authenticateMic(response, request);
+    if (!device) {
+      return;
+    }
+
+    print_req(request);
+
+    auto result = mic::session_start(*device);
+    if (auto failure = std::get_if<mic::session_error_e>(&result)) {
+      if (*failure == mic::session_error_e::unsupported) {
+        mic_error(response, SimpleWeb::StatusCode::server_error_not_implemented, "This host cannot receive a microphone");
+      } else {
+        mic_error(response, SimpleWeb::StatusCode::server_error_internal_server_error, "Could not start a mic session");
+      }
+      return;
+    }
+
+    auto &info = std::get<mic::session_info_t>(result);
+    nlohmann::json output_tree;
+    output_tree["status"] = true;
+    output_tree["session_id"] = info.session_id;
+    output_tree["key"] = SimpleWeb::Crypto::Base64::encode(info.key);
+    output_tree["port"] = info.port;
+    send_response(response, output_tree);
+  }
+
+  /**
+   * @brief End the mic session of the calling mic device.
+   *
+   * @api_examples{/api/mic/session| DELETE| null}
+   */
+  void micSessionEnd(resp_https_t response, req_https_t request) {
+    auto device = authenticateMic(response, request);
+    if (!device) {
+      return;
+    }
+
+    print_req(request);
+
+    mic::session_end(device->uuid);
+
+    nlohmann::json output_tree;
+    output_tree["status"] = true;
+    send_response(response, output_tree);
+  }
+
+  /**
    * @brief Start the HTTPS server.
    */
   void start() {
@@ -1646,6 +1904,13 @@ namespace confighttp {
     server.resource["^/api/clients/disconnect$"]["POST"] = disconnect;
     server.resource["^/api/token$"]["POST"] = generateApiToken;
     server.resource["^/api/token$"]["DELETE"] = revokeApiToken;
+    server.resource["^/api/mic/pair$"]["POST"] = micPair;
+    server.resource["^/api/mic/pair/status$"]["POST"] = micPairStatus;
+    server.resource["^/api/mic/pin$"]["POST"] = micPin;
+    server.resource["^/api/mic/list$"]["GET"] = micList;
+    server.resource["^/api/mic/remove$"]["POST"] = micRemove;
+    server.resource["^/api/mic/session$"]["POST"] = micSessionStart;
+    server.resource["^/api/mic/session$"]["DELETE"] = micSessionEnd;
     server.resource["^/api/covers/upload$"]["POST"] = uploadCover;
     server.resource["^/images/apollo.ico$"]["GET"] = getFaviconImage;
     server.resource["^/images/logo-apollo-45.png$"]["GET"] = getApolloLogoImage;

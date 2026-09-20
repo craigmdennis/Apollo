@@ -98,6 +98,27 @@ The key is read-only: it is accepted only on `GET` requests to allowlisted paths
 from another LAN host without exposing the rest of the Web UI. Use the
 `named_certs[].connected` flags in the response to drive automations.
 
+## Remote microphone
+
+Calliope pairs with Apollo as a microphone. See [Remote microphone](remote_microphone.md)
+for setup.
+
+| Endpoint | Authentication | Purpose |
+|---|---|---|
+| `POST /api/mic/pair` | None, LAN only | Calliope starts pairing |
+| `POST /api/mic/pair/status` | None, LAN only | Calliope polls for the pairing result |
+| `POST /api/mic/pin` | Web UI login | Submits the PIN and device name |
+| `GET /api/mic/list` | Web UI login or read-only API key | Lists paired microphones |
+| `POST /api/mic/remove` | Web UI login | Removes one microphone |
+| `POST /api/mic/session` | Mic token | Starts a mic session |
+| `DELETE /api/mic/session` | Mic token | Ends the mic session |
+
+`GET /api/mic/list` returns the same shape as `/api/clients/list`:
+
+    {"status": true, "named_mics": [{"name": "Living room iPhone", "uuid": "...", "connected": true}]}
+
+At most one entry has `connected: true`. The response never contains a token.
+
 <div class="section_buttons">
 
 | Previous                                    |                                  Next |
