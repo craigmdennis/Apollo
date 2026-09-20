@@ -3229,7 +3229,17 @@ Change the allowlist to:
   };
 ```
 
-- [ ] **Step 2: Add the helpers**
+- [ ] **Step 2: Redact credentials in request logs**
+
+`print_req` compares the header name with `name == "Authorization"`. Simple-Web-Server keeps the casing that the client sent, so `authorization: Bearer <token>` is logged in full at the debug level. The new routes carry a mic token in that header. Change the logging line in `print_req` to:
+
+```cpp
+      BOOST_LOG(debug) << name << " -- " << ((boost::iequals(name, "Authorization") || boost::iequals(name, "Cookie")) ? "CREDENTIALS REDACTED" : val);
+```
+
+`<boost/algorithm/string.hpp>` is already included.
+
+- [ ] **Step 2b: Add the helpers**
 
 After the closing brace of `checkIPOrigin`, add:
 
@@ -3329,7 +3339,7 @@ Immediately before the definition of `void start()`, add:
       send_response(response, output_tree);
     } catch (std::exception &e) {
       BOOST_LOG(warning) << "MicPair: "sv << e.what();
-      bad_request(response, request, e.what());
+      bad_request(response, request, "Invalid request");
     }
   }
 
@@ -3370,7 +3380,7 @@ Immediately before the definition of `void start()`, add:
       send_response(response, output_tree);
     } catch (std::exception &e) {
       BOOST_LOG(warning) << "MicPairStatus: "sv << e.what();
-      bad_request(response, request, e.what());
+      bad_request(response, request, "Invalid request");
     }
   }
 
@@ -3462,8 +3472,8 @@ Immediately before the definition of `void start()`, add:
     print_req(request);
 
     auto result = mic::session_start(*device);
-    if (auto error = std::get_if<mic::session_error_e>(&result)) {
-      if (*error == mic::session_error_e::unsupported) {
+    if (auto failure = std::get_if<mic::session_error_e>(&result)) {
+      if (*failure == mic::session_error_e::unsupported) {
         mic_error(response, SimpleWeb::StatusCode::server_error_not_implemented, "This host cannot receive a microphone");
       } else {
         mic_error(response, SimpleWeb::StatusCode::server_error_internal_server_error, "Could not start a mic session");
