@@ -80,7 +80,7 @@ namespace confighttp {
     BOOST_LOG(debug) << "METHOD :: "sv << request->method;
     BOOST_LOG(debug) << "DESTINATION :: "sv << request->path;
     for (auto &[name, val] : request->header) {
-      BOOST_LOG(debug) << name << " -- " << (name == "Authorization" ? "CREDENTIALS REDACTED" : val);
+      BOOST_LOG(debug) << name << " -- " << ((boost::iequals(name, "Authorization") || boost::iequals(name, "Cookie")) ? "CREDENTIALS REDACTED" : val);
     }
     BOOST_LOG(debug) << " [--] "sv;
     for (auto &[name, val] : request->parse_query_string()) {
@@ -317,7 +317,6 @@ namespace confighttp {
     send_unauthorized(response, request);
     return std::nullopt;
   }
-
 
   /**
    * @brief Validate the request content type and send bad request when mismatch.
@@ -1680,7 +1679,7 @@ namespace confighttp {
       send_response(response, output_tree);
     } catch (std::exception &e) {
       BOOST_LOG(warning) << "MicPair: "sv << e.what();
-      bad_request(response, request, e.what());
+      bad_request(response, request, "Invalid request");
     }
   }
 
@@ -1721,7 +1720,7 @@ namespace confighttp {
       send_response(response, output_tree);
     } catch (std::exception &e) {
       BOOST_LOG(warning) << "MicPairStatus: "sv << e.what();
-      bad_request(response, request, e.what());
+      bad_request(response, request, "Invalid request");
     }
   }
 
