@@ -638,7 +638,7 @@ git commit -m "feat(mic): add remote microphone packet protocol"
   - `struct jitter_buffer_t::pop_result_t { pop_e kind; std::vector<std::uint8_t> payload; }`
   - `bool push(std::uint32_t sequence, std::vector<std::uint8_t> payload)`. Returns false for a duplicate or late frame.
   - `pop_result_t pop()`. Called once per 20 ms.
-  - `void reset()`, `std::size_t size() const`
+  - `std::size_t size() const`
   - `static constexpr std::size_t PREBUFFER_FRAMES = 2`, `MAX_FRAMES = 10`
 
 Behaviour: playout starts when 2 frames are queued. A missing sequence returns `lost`, and the caller runs Opus loss concealment. An empty buffer stops playout and returns `wait`, which covers the muted state where Calliope sends no audio.
@@ -806,8 +806,6 @@ namespace mic {
      */
     pop_result_t pop();
 
-    void reset();
-
     std::size_t size() const {
       return frames.size();
     }
@@ -888,11 +886,6 @@ namespace mic {
     return result;
   }
 
-  void jitter_buffer_t::reset() {
-    frames.clear();
-    started = false;
-    next_sequence = 0;
-  }
 }  // namespace mic
 ```
 
