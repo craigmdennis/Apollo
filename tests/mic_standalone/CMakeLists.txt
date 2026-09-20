@@ -8,6 +8,10 @@ set(APOLLO_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../..")
 
 find_package(OpenSSL REQUIRED)
 
+# libopus, for the playout tests. Apollo includes it as <opus/opus.h>.
+find_path(OPUS_INCLUDE_DIR opus/opus.h REQUIRED)
+find_library(OPUS_LIBRARY opus REQUIRED)
+
 include(FetchContent)
 FetchContent_Declare(json URL https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz)
 FetchContent_MakeAvailable(json)
@@ -16,7 +20,7 @@ set(INSTALL_GTEST OFF)
 add_subdirectory("${APOLLO_DIR}/third-party/googletest" googletest)
 
 set(MIC_SOURCES "${APOLLO_DIR}/src/crypto.cpp")
-foreach(unit mic_protocol mic_jitter mic_store mic_pairing)
+foreach(unit mic_protocol mic_jitter mic_store mic_pairing mic_playout)
     if(EXISTS "${APOLLO_DIR}/src/${unit}.cpp")
         list(APPEND MIC_SOURCES "${APOLLO_DIR}/src/${unit}.cpp")
     endif()
@@ -25,8 +29,8 @@ endforeach()
 file(GLOB MIC_TEST_SOURCES CONFIGURE_DEPENDS "${APOLLO_DIR}/tests/unit/test_mic_*.cpp")
 
 add_executable(${PROJECT_NAME} ${MIC_SOURCES} ${MIC_TEST_SOURCES})
-target_include_directories(${PROJECT_NAME} PRIVATE "${APOLLO_DIR}")
+target_include_directories(${PROJECT_NAME} PRIVATE "${APOLLO_DIR}" "${OPUS_INCLUDE_DIR}")
 # The Apollo test suite defines SUNSHINE_SOURCE_DIR. The mic tests use it to find tests/fixtures.
 target_compile_definitions(${PROJECT_NAME} PRIVATE SUNSHINE_SOURCE_DIR="${APOLLO_DIR}")
 target_link_libraries(${PROJECT_NAME} PRIVATE
-        OpenSSL::SSL OpenSSL::Crypto nlohmann_json::nlohmann_json gtest gtest_main)
+        OpenSSL::SSL OpenSSL::Crypto nlohmann_json::nlohmann_json "${OPUS_LIBRARY}" gtest gtest_main)

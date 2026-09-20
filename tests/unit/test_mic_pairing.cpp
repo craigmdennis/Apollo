@@ -3,7 +3,6 @@
  * @brief Test src/mic_pairing.*.
  */
 #include <gtest/gtest.h>
-
 #include <src/mic_pairing.h>
 #include <src/mic_protocol.h>
 

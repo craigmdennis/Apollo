@@ -3,7 +3,6 @@
  * @brief Test src/mic_jitter.*.
  */
 #include <gtest/gtest.h>
-
 #include <src/mic_jitter.h>
 
 namespace {

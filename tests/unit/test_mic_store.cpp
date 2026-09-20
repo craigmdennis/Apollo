@@ -2,13 +2,11 @@
  * @file tests/unit/test_mic_store.cpp
  * @brief Test src/mic_store.*.
  */
-#include <gtest/gtest.h>
-
 #include <filesystem>
 #include <fstream>
-#include <sstream>
-
+#include <gtest/gtest.h>
 #include <src/mic_store.h>
+#include <sstream>
 
 namespace {
   class MicStore: public testing::Test {

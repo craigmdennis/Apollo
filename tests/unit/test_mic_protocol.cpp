@@ -2,13 +2,10 @@
  * @file tests/unit/test_mic_protocol.cpp
  * @brief Test src/mic_protocol.* against the shared vectors in tests/fixtures/mic_vectors.json.
  */
-#include <gtest/gtest.h>
-
 #include <algorithm>
 #include <fstream>
-
+#include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
-
 #include <src/mic_protocol.h>
 
 namespace {

@@ -4,28 +4,36 @@
  *
  * This module never touches streaming code. Every failure ends the mic session only.
  *
- * Playout is pull-based: the virtual microphone's render thread calls fill_from_session()
+ * Playout is pull-based: the virtual microphone's render thread calls playout_t::fill()
  * when the device has room, so the audio device clock is the only playout clock.
  * Design evidence: docs/superpowers/research/2026-09-20-voice-playout.md.
+ *
+ * Threads:
+ * - The mic thread runs one io_context. It owns the socket, the timer, and the mic session.
+ * - The render thread belongs to the virtual microphone. It touches playout_t only.
+ * - Config server threads call the functions in mic.h. They reach the mic session by
+ *   posting to the io_context. state_mutex guards everything they share with the mic
+ *   thread: the store, the pairing state, the connected device id, and the lifecycle
+ *   (io, thread, stopped).
  */
 // standard includes
 #include <array>
 #include <atomic>
 #include <cstring>
 #include <future>
+#include <memory>
 #include <mutex>
 #include <thread>
 
 // lib includes
 #include <boost/asio.hpp>
-#include <opus/opus.h>
 
 // local includes
 #include "config.h"
 #include "file_handler.h"
 #include "logging.h"
 #include "mic.h"
-#include "mic_jitter.h"
+#include "mic_playout.h"
 #include "mic_protocol.h"
 #include "network.h"
 #include "platform/common.h"
@@ -41,28 +49,28 @@ namespace mic {
     using steady = std::chrono::steady_clock;
 
     constexpr int MIC_PORT_OFFSET = 13;
-    constexpr int FRAME_SAMPLES = 960;  // 20 ms at 48 kHz, the duration concealed for one lost frame
     constexpr auto HOUSEKEEPING = 1s;
     constexpr auto SESSION_TIMEOUT = 5s;
     constexpr auto REPLACED_LIFETIME = 5s;
-    constexpr int MAX_DECODE_FAILURES = 25;  // 500 ms of consecutive failures
+    // Opening the virtual microphone can install a driver, which takes several seconds.
+    constexpr auto SESSION_START_TIMEOUT = 30s;
 
     struct session_t {
       std::uint32_t id;
       crypto::cipher::gcm_t cipher;
       device_t device;
       steady::time_point last_valid;
-      std::atomic<protocol::error_e> error {protocol::error_e::none};
 
-      // Shared by the mic thread (push) and the render thread (pop).
-      std::mutex jitter_mutex;
-      jitter_buffer_t jitter;
+      // Pings count from 0 and only ever increase, so an old ping is a replay.
+      bool have_ping = false;
+      std::uint32_t last_ping = 0;
 
-      // Touched only by the render thread, through fill_from_session().
-      OpusDecoder *decoder = nullptr;
-      bool waiting = true;
-      int decode_failures = 0;
+      protocol::error_e error_code = protocol::error_e::none;  ///< Sent in every pong
+      protocol::error_e notified = protocol::error_e::none;  ///< Last error shown in the tray
 
+      // Members die in reverse order. vmic is declared last, so the virtual microphone and its
+      // render thread are gone before playout, which holds the decoder that thread uses.
+      playout_t playout;
       std::unique_ptr<platf::virtual_mic_t> vmic;
     };
 
@@ -72,19 +80,21 @@ namespace mic {
       steady::time_point expires;
     };
 
-    // Guarded by state_mutex. Read by config server handlers.
+    // Guarded by state_mutex. Shared by config server threads and the mic thread.
     std::mutex state_mutex;
     std::unique_ptr<store_t> store;
     pairing_t pairing;
     crypto::sha256_t fingerprint {};
     std::string connected_uuid;
+    std::shared_ptr<asio::io_context> io;
+    std::thread thread;
+    bool stopped = false;  ///< Set once by stop(). The mic thread never starts again.
 
-    // Owned by the mic thread.
-    std::unique_ptr<asio::io_context> io;
+    std::atomic<bool> running {false};
+
+    // Owned by the mic thread. Created and destroyed inside run().
     std::unique_ptr<udp::socket> socket;
     std::unique_ptr<asio::steady_timer> timer;
-    std::thread thread;
-    std::atomic<bool> running {false};
     std::unique_ptr<session_t> session;
     std::optional<replaced_t> replaced;
     std::array<char, 2048> receive_buffer;
@@ -124,46 +134,24 @@ namespace mic {
     }
 
     /**
-     * @brief Decode the next packet for the virtual microphone. Runs on the render thread.
-     * @return The number of samples written to out, or 0 when nothing is ready to play.
+     * @brief Write the store and log a failure. Call with state_mutex held.
      */
-    std::size_t fill_from_session(session_t &target, float *out, std::size_t capacity) {
-      jitter_buffer_t::pop_result_t next;
-      {
-        std::lock_guard lock {target.jitter_mutex};
-        next = target.jitter.pop();
+    bool save_store() {
+      if (store->save()) {
+        return true;
       }
+      BOOST_LOG(error) << "Remote microphone: could not write mic_state.json"sv;
+      return false;
+    }
 
-      if (next.kind == jitter_buffer_t::pop_e::wait) {
-        target.waiting = true;
-        return 0;
+    /**
+     * @brief Show a session error in the tray once. Runs on the mic thread only.
+     */
+    void report_error(session_t &target) {
+      if (target.error_code != target.notified) {
+        notify_error(target.error_code);
+        target.notified = target.error_code;
       }
-      if (target.waiting) {
-        // The sender was muted or silent. Decoding against the state of the last talkspurt
-        // blends two unrelated signals, so the decoder starts clean.
-        opus_decoder_ctl(target.decoder, OPUS_RESET_STATE);
-        target.waiting = false;
-      }
-
-      int samples;
-      if (next.kind == jitter_buffer_t::pop_e::frame) {
-        // capacity covers a 120 ms packet. A 960-sample buffer rejects anything longer than 20 ms.
-        samples = opus_decode_float(target.decoder, next.payload.data(), static_cast<opus_int32>(next.payload.size()), out, static_cast<int>(capacity), 0);
-      } else {
-        // A null payload asks Opus to conceal one lost frame of FRAME_SAMPLES.
-        samples = opus_decode_float(target.decoder, nullptr, 0, out, FRAME_SAMPLES, 0);
-      }
-
-      if (samples < 0) {
-        if (++target.decode_failures == MAX_DECODE_FAILURES) {
-          target.error = protocol::error_e::decode_failed;
-          notify_error(protocol::error_e::decode_failed);
-        }
-        return 0;
-      }
-
-      target.decode_failures = 0;
-      return static_cast<std::size_t>(samples);
     }
 
     /**
@@ -175,19 +163,15 @@ namespace mic {
       }
 
       auto name = session->device.name;
-      // Order matters. Destroying the virtual microphone joins the render thread, which is the
-      // only user of the decoder. It also restores the default capture device.
-      session->vmic.reset();
-      if (session->decoder) {
-        opus_decoder_destroy(session->decoder);
-      }
+      // Destroying the session destroys the virtual microphone first (see session_t), which
+      // joins the render thread and restores the default capture device.
       session.reset();
 
       {
         std::lock_guard lock {state_mutex};
         connected_uuid.clear();
         store->previous_default_capture.clear();
-        store->save();
+        save_store();
       }
 
       BOOST_LOG(info) << "Remote microphone: session ended for ["sv << name << "] "sv << reason;
@@ -217,33 +201,27 @@ namespace mic {
       next->device = device;
       next->last_valid = steady::now();
 
-      int opus_error = OPUS_OK;
-      next->decoder = opus_decoder_create(48000, 1, &opus_error);
-      if (opus_error != OPUS_OK) {
-        next->decoder = nullptr;
-        next->error = protocol::error_e::decode_failed;
-      }
-
-      if (next->decoder) {
-        // The callback runs on the render thread until vmic is destroyed, and end_session()
-        // destroys vmic before the session, so the raw pointer stays valid.
-        auto *target = next.get();
+      if (!next->playout.ready()) {
+        next->error_code = protocol::error_e::decode_failed;
+      } else {
+        // The callback runs on the render thread until vmic is destroyed. vmic is the last
+        // member of session_t, so it is destroyed before playout.
+        auto *playout = &next->playout;
         platf::virtual_mic_error_e vmic_error = platf::virtual_mic_error_e::none;
         next->vmic = platf::virtual_mic(
-          [target](float *out, std::size_t capacity) {
-            return fill_from_session(*target, out, capacity);
+          [playout](float *out, std::size_t capacity) {
+            return playout->fill(out, capacity);
           },
           vmic_error
         );
 
         if (vmic_error == platf::virtual_mic_error_e::unsupported) {
-          opus_decoder_destroy(next->decoder);
           return session_error_e::unsupported;
         }
         if (vmic_error == platf::virtual_mic_error_e::device_missing) {
-          next->error = protocol::error_e::device_missing;
+          next->error_code = protocol::error_e::device_missing;
         } else if (vmic_error == platf::virtual_mic_error_e::device_open_failed) {
-          next->error = protocol::error_e::device_open_failed;
+          next->error_code = protocol::error_e::device_open_failed;
         }
       }
 
@@ -254,15 +232,15 @@ namespace mic {
         connected_uuid = device.uuid;
         if (session->vmic) {
           store->previous_default_capture = session->vmic->previous_default_capture();
-          store->save();
+          save_store();
         }
       }
 
       BOOST_LOG(info) << "Remote microphone: session started for ["sv << device.name << ']';
-      if (session->error == protocol::error_e::none) {
+      if (session->error_code == protocol::error_e::none) {
         notify_connected(device.name);
       } else {
-        notify_error(session->error);
+        report_error(*session);
       }
 
       return session_info_t {id, key_bytes, net::map_port(MIC_PORT_OFFSET)};
@@ -289,15 +267,20 @@ namespace mic {
         if (!packet) {
           return;
         }
-        session->last_valid = steady::now();
 
+        // Only a fresh packet keeps the session alive. A captured packet sent again must not.
         if (packet->header.type == protocol::packet_type_e::audio) {
-          if (session->error == protocol::error_e::none) {
-            std::lock_guard lock {session->jitter_mutex};
-            session->jitter.push(packet->header.sequence, std::move(packet->payload));
+          if (session->error_code == protocol::error_e::none && session->playout.push(packet->header.sequence, std::move(packet->payload))) {
+            session->last_valid = steady::now();
           }
         } else if (packet->header.type == protocol::packet_type_e::ping) {
-          send_pong(session->cipher, session->id, packet->header.sequence, session->error);
+          if (session->have_ping && packet->header.sequence <= session->last_ping) {
+            return;
+          }
+          session->have_ping = true;
+          session->last_ping = packet->header.sequence;
+          session->last_valid = steady::now();
+          send_pong(session->cipher, session->id, packet->header.sequence, session->error_code);
         }
         return;
       }
@@ -327,10 +310,20 @@ namespace mic {
       if (session) {
         if (now - session->last_valid > SESSION_TIMEOUT) {
           end_session("connection lost", true);
-        } else if (session->vmic && !session->vmic->healthy()) {
-          session->error = protocol::error_e::device_open_failed;
-          notify_error(protocol::error_e::device_open_failed);
-          session->vmic.reset();
+        } else {
+          // The render thread only latches a failure. The tray is driven from this thread.
+          if (session->error_code == protocol::error_e::none && session->playout.decode_failed()) {
+            session->error_code = protocol::error_e::decode_failed;
+          }
+          if (session->vmic && !session->vmic->healthy()) {
+            session->error_code = protocol::error_e::device_open_failed;
+            session->vmic.reset();  // restores the default capture device
+
+            std::lock_guard lock {state_mutex};
+            store->previous_default_capture.clear();
+            save_store();
+          }
+          report_error(*session);
         }
       }
 
@@ -354,42 +347,60 @@ namespace mic {
       });
     }
 
-    void run(std::promise<bool> ready) {
+    /**
+     * @brief The mic thread. Holds its own reference to the io_context for its whole life.
+     */
+    void run(std::shared_ptr<asio::io_context> context, std::promise<bool> ready) {
       try {
         auto address_family = net::af_from_enum_string(config::sunshine.address_family);
         auto protocol_family = address_family == net::IPV4 ? udp::v4() : udp::v6();
         auto port = net::map_port(MIC_PORT_OFFSET);
 
-        socket = std::make_unique<udp::socket>(*io);
+        socket = std::make_unique<udp::socket>(*context);
         socket->open(protocol_family);
         socket->bind(udp::endpoint(protocol_family, port));
 
-        timer = std::make_unique<asio::steady_timer>(*io);
+        timer = std::make_unique<asio::steady_timer>(*context);
         timer->expires_after(HOUSEKEEPING);
         timer->async_wait(on_housekeeping);
         receive_next();
 
         BOOST_LOG(info) << "Remote microphone: listening on UDP port "sv << port;
-        running = true;
-        ready.set_value(true);
       } catch (const std::exception &e) {
         BOOST_LOG(error) << "Remote microphone: could not open the UDP port: "sv << e.what();
+        // I/O objects must die before their io_context.
+        timer.reset();
+        socket.reset();
         ready.set_value(false);
         return;
       }
 
+      running = true;
+      ready.set_value(true);
+
       try {
-        io->run();
+        context->run();
       } catch (const std::exception &e) {
         BOOST_LOG(error) << "Remote microphone: the mic thread stopped: "sv << e.what();
       }
+
+      // A session must not outlive its thread: nothing would time it out or restore the device.
+      end_session("the mic thread stopped", false);
+      timer.reset();
+      socket.reset();
+      // Last statement. ensure_thread() joins this thread while it holds state_mutex, and
+      // end_session() above takes state_mutex, so running stays true until that is done.
       running = false;
     }
 
     /**
      * @brief Start the mic thread when it is not running. Call with state_mutex held.
+     * @return false after stop(), or when the UDP port cannot be opened.
      */
     bool ensure_thread() {
+      if (stopped) {
+        return false;
+      }
       if (running) {
         return true;
       }
@@ -397,11 +408,23 @@ namespace mic {
         thread.join();
       }
 
-      io = std::make_unique<asio::io_context>();
+      // The previous thread destroyed its socket and timer before it cleared running.
+      io = std::make_shared<asio::io_context>();
       std::promise<bool> ready;
       auto started = ready.get_future();
-      thread = std::thread {run, std::move(ready)};
+      thread = std::thread {run, io, std::move(ready)};
       return started.get();
+    }
+
+    /**
+     * @brief The io_context to post to, or null when the mic thread is not running.
+     */
+    std::shared_ptr<asio::io_context> live_context() {
+      std::lock_guard lock {state_mutex};
+      if (stopped || !running) {
+        return nullptr;
+      }
+      return io;
     }
   }  // namespace
 
@@ -411,18 +434,20 @@ namespace mic {
     auto file = std::filesystem::path {config::nvhttp.file_state}.parent_path() / "mic_state.json";
     store = std::make_unique<store_t>(file);
     if (!store->load()) {
-      BOOST_LOG(error) << "Remote microphone: could not read "sv << file.string() << ". Paired microphones are unavailable until the file is repaired or deleted."sv;
+      BOOST_LOG(error) << "Remote microphone: could not read "sv << file.string() << ". No microphone is paired. The next pairing replaces the file."sv;
     }
 
     if (auto value = protocol::cert_fingerprint(file_handler::read_file(config::nvhttp.cert.c_str()))) {
       fingerprint = *value;
+    } else {
+      BOOST_LOG(error) << "Remote microphone: could not read the host certificate. Pairing a microphone fails until Apollo restarts with a readable certificate."sv;
     }
 
     if (!store->previous_default_capture.empty()) {
       BOOST_LOG(info) << "Remote microphone: restoring the default capture device after an unclean exit"sv;
       platf::restore_default_capture(store->previous_default_capture);
       store->previous_default_capture.clear();
-      store->save();
+      save_store();
     }
 
     // Inert until a mic device is paired: no thread and no socket.
@@ -432,16 +457,28 @@ namespace mic {
   }
 
   void stop() {
-    if (!thread.joinable()) {
-      return;
+    std::shared_ptr<asio::io_context> context;
+    {
+      std::lock_guard lock {state_mutex};
+      stopped = true;  // from here on ensure_thread() refuses, so nobody else touches thread
+      context = io;
     }
-    if (running) {
-      asio::post(*io, []() {
+
+    if (context && running) {
+      asio::post(*context, [context]() {
         end_session("Apollo is closing", false);
-        io->stop();
+        context->stop();
       });
     }
-    thread.join();
+    if (thread.joinable()) {
+      thread.join();
+    }
+
+    // Dropping the last references destroys the io_context and every handler still queued in
+    // it. That breaks the promise of a session_start() whose handler never ran.
+    context.reset();
+    std::lock_guard lock {state_mutex};
+    io.reset();
   }
 
   std::optional<std::string> pair_request(const std::string &address, const std::string &name, const std::string &nonce, const crypto::sha256_t &proof) {
@@ -476,7 +513,7 @@ namespace mic {
     auto token = crypto::rand_alphabet(48, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789");
 
     store->add(device_name, uuid, token);
-    if (!store->save()) {
+    if (!save_store()) {
       store->remove(uuid);
       return std::nullopt;
     }
@@ -498,18 +535,20 @@ namespace mic {
 
   bool remove(const std::string &uuid) {
     bool was_connected;
+    bool saved;
     {
       std::lock_guard lock {state_mutex};
       if (!store->remove(uuid)) {
         return false;
       }
-      store->save();
+      saved = save_store();
       was_connected = connected_uuid == uuid;
     }
     if (was_connected) {
       session_end(uuid);
     }
-    return true;
+    // false tells the web UI that the device returns after a restart.
+    return saved;
   }
 
   std::optional<device_t> authorize(const std::string &token) {
@@ -518,31 +557,47 @@ namespace mic {
   }
 
   std::variant<session_info_t, session_error_e> session_start(const device_t &device) {
+    using result_t = std::variant<session_info_t, session_error_e>;
+
+    std::shared_ptr<asio::io_context> context;
     {
       std::lock_guard lock {state_mutex};
       if (!ensure_thread()) {
         return session_error_e::failed;
       }
+      context = io;
     }
 
-    std::promise<std::variant<session_info_t, session_error_e>> promise;
-    auto result = promise.get_future();
-    asio::post(*io, [&]() {
+    // Shared, and captured by value: the handler can run after this function gave up waiting.
+    auto promise = std::make_shared<std::promise<result_t>>();
+    auto result = promise->get_future();
+    asio::post(*context, [promise, device]() {
       try {
-        promise.set_value(begin_session(device));
+        promise->set_value(begin_session(device));
       } catch (const std::exception &e) {
         BOOST_LOG(error) << "Remote microphone: could not start a session: "sv << e.what();
-        promise.set_value(session_error_e::failed);
+        promise->set_value(session_error_e::failed);
       }
     });
-    return result.get();
+    // stop() destroys the io_context to break this promise when the handler never runs.
+    context.reset();
+
+    try {
+      if (result.wait_for(SESSION_START_TIMEOUT) != std::future_status::ready) {
+        return session_error_e::failed;
+      }
+      return result.get();
+    } catch (const std::future_error &) {
+      return session_error_e::failed;
+    }
   }
 
   void session_end(const std::string &uuid) {
-    if (!running) {
+    auto context = live_context();
+    if (!context) {
       return;
     }
-    asio::post(*io, [uuid]() {
+    asio::post(*context, [uuid]() {
       if (session && session->device.uuid == uuid) {
         end_session("", true);
       }
