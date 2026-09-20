@@ -15,15 +15,48 @@ Apollo gains a remote microphone receiver. A companion app named Calliope (iOS a
 | Host plan, tasks 1 to 11 | Complete. Every task passed a task review |
 | Whole-branch review | 0 Critical, 7 Important, 15 Minor. All Important findings fixed in `ab81fd5a`, and a scoped re-review confirmed each fix |
 | Tests on macOS | 46 tests from 5 suites pass in the standalone target. `src/mic.cpp` and `src/confighttp.cpp` pass a syntax-only compile |
-| Windows build | Not run. This is the next step |
+| Windows build | Passes, 2026-09-20. `src/platform/windows/mic_write.cpp` compiled first time with no errors and no warnings. The stream-path diff against `master` is empty |
+| Tests on Windows | 46 tests from 5 suites pass, the same count as macOS |
+| Windows verification | Task 9 Steps 3 and 4 pass. Step 5: 9 of 13 items pass, 2 are degenerate on this PC, 1 is pending, 1 is not reproducible. Step 6: 1 of 4 passes, 1 is unreachable, 2 are pending. The detail is below |
 | Calliope app | Not started. The private repository `craigmdennis/Calliope` holds copies of the spec, the Apple research report, the reference sender, and the test vectors |
 
-### Unverified until the Windows build
+### What the Windows verification established
 
-1. `src/platform/windows/mic_write.cpp` has never been compiled. The file was read twice against `src/platform/windows/audio.cpp` and the MinGW-w64 headers.
-2. `store_t::save()` in `src/mic_store.cpp` falls back to remove-then-rename when a rename over an existing file fails. macOS never enters that branch.
-3. The Microphone tab and the Microphones list on the PIN page have never been seen in a browser.
-4. No audio has been heard. The reference sender transmits Opus silence, which proves pairing, session, tray, and device switching. Audible audio needs Calliope.
+Run on 2026-09-20 against a build launched from `cmake-build-mic` with its own config directory, so
+the installed Apollo was untouched. The reference sender ran both over loopback and from a Mac on
+the LAN, and both paths behaved the same.
+
+- **Step 3, build and unit tests.** Pass.
+- **Step 4, inert until paired.** Pass. UDP 48002 was unbound with no `mic_state.json`, and a
+  Moonlight stream was unaffected. Once a device is paired the socket stays open for Apollo's life,
+  which is the gate at `src/mic.cpp:466` working as written, not a contradiction of this step.
+- **Step 5.** Items 1, 2, 3, 4, 6, 10, 11, 12 and 13 pass. Item 3 returned `pong error code: 0`
+  throughout, item 11 showed `replaced by` on the host and code 4 at the replaced client, and item
+  13 was read from the endpoints directly: both are 2 channels, 32 bit, 48000 Hz. Items 5 and 8 are
+  degenerate here, see finding 4. Item 7 is pending. Item 9 is not reproducible, see finding 5.
+- **Step 6.** Item 1 passes: the session ended 5.4 seconds after the last packet with the reason
+  `connection lost`. Item 2 is unreachable on this PC, see finding 4. Items 3 and 4 are pending;
+  for item 3 the device was removed and re-paired, but the HTTP 401 at the session request was not
+  confirmed.
+
+Three things outside the checklist were also established. The `device_missing` path was exercised
+end to end by accident, reaching the client as pong code 1 with the tray notice raised. The
+read-only API key is correctly scoped: `GET /api/mic/list` answers 200 while `POST /api/mic/pin`,
+`POST /api/mic/remove`, `POST /api/mic/session` and `DELETE /api/mic/session` all answer 401. And
+`store_t::save()` replaced its file repeatedly under the Windows toolchain across pairings and
+restarts.
+
+### Still unverified
+
+1. `store_t::save()`'s remove-then-rename fallback in `src/mic_store.cpp` is still untaken. The
+   ordinary rename succeeded every time on Windows, so the fallback never ran.
+2. No audio has been heard. The reference sender transmits Opus silence, which proves pairing, the
+   session, the tray, the device format and the write into the endpoint. Audible audio needs
+   Calliope.
+3. The default capture switch and restore, and the recovery from an unclean exit, for the reason in
+   finding 4.
+4. The Remote Desktop message added for finding 2 has not been seen. It cannot be reached from the
+   console session, so it needs one deliberate run from RDP.
 
 ## Get the branch on Windows
 
@@ -101,6 +134,63 @@ The full checklist is Task 9, Steps 3 to 6, in `docs/superpowers/plans/2026-09-2
 | `docs/superpowers/research/2026-09-20-calliope-apple-frameworks.md` | Apple capture, Opus encode, signing, and distribution findings |
 | `docs/remote_microphone.md` | The user guide |
 | `docs/api.md` | The `/api/mic/*` routes |
+
+## Findings from the Windows verification
+
+1. **The tray notices repeat their own title in the body.** `update_tray_mic_connected` and
+   `update_tray_mic_disconnected` in `src/system_tray.cpp:444` build a body that starts with the
+   title, so a toast reads "Microphone connected" above "Microphone connected: Local test". The
+   other two mic notices do not do this, and neither does the rest of the file:
+   `update_tray_playing` at `src/system_tray.cpp:238` pairs the title "App launched" with the body
+   "[name] launched." The body should carry only the detail, so "Local test" for a connection and
+   "Local test (connection lost)" for a disconnection, with the reason kept in the parentheses it
+   already uses. Seen on Windows on 2026-09-20. **Fixed**: the body now carries only the detail.
+
+2. **A host whose only login is a Remote Desktop session cannot serve a remote microphone.**
+   Windows replaces the audio endpoints of an RDP session with redirected ones, so
+   `find_steam_endpoint` at `src/platform/windows/mic_write.cpp:112` sees one render endpoint named
+   "Remote Audio" and no capture endpoints at all. The host reports `device_missing` and the client
+   receives pong code 1. An enumeration probe run inside the RDP session found exactly that; the
+   same probe, after the session was moved to the physical console, found both
+   "Speakers (Steam Streaming Microphone)" and "Microphone (Steam Streaming Microphone)". This is
+   not only a testing note: `sunshinesvc` launches Sunshine into the active console session
+   (`tools/sunshinesvc.cpp:245`), and when a user connects over RDP as the same user their session
+   becomes that console session, so the shipped service is blind in exactly the same way. The
+   Windows verification must therefore run with a session attached to the physical console, and the
+   user guide should say that the remote microphone needs one too. **Fixed** for the messaging: the
+   platform layer now reports `device_hidden_in_session`, the driver install is skipped in a remote
+   session so it no longer complains about privileges, and the tray names the session as the reason
+   instead of telling the user to install Steam. The wire code stays 1, because the pong codes are
+   part of the Calliope contract. `docs/remote_microphone.md` still needs the note.
+
+3. **The UCRT64 shell must be started with `-use-full-path` or CMake cannot find npm.**
+   `docs/building.md` requires `node.exe` on `PATH` before `cmake`, but `msys2_shell.cmd` strips the
+   Windows `PATH` by default, so `find_program(NPM npm)` at `cmake/targets/common.cmake:55` fails
+   with "Could not find NPM using the following names: npm" even when the official Node is
+   installed. Configuring from `C:\msys64\msys2_shell.cmd -defterm -here -no-start -ucrt64
+   -use-full-path` succeeds. `docs/building.md` should carry the flag.
+
+4. **The default capture switch and restore cannot be exercised on a PC whose only capture device
+   is the Steam microphone.** `src/platform/windows/mic_write.cpp:332` clears `previous_default`
+   when it already equals the Steam capture endpoint, which is correct and carries its own comment,
+   but it means `previous_default_capture` stays empty for the whole session. Read mid-session on
+   2026-09-20, `mic_state.json` held `""`. Task 9 Step 5 items 5 and 8 then pass trivially, and the
+   recovery branch at `src/mic.cpp:459` that Step 6 item 2 exists to prove never runs. Both need a
+   second capture device that is the default before the mic session starts.
+
+5. **Task 9 Step 5 item 9 cannot be reproduced on a PC that already has the Steam driver.** The
+   Steam Streaming Microphone was installed and active, so the first-session install, the
+   multi-second session request, and the HTTP 503 that follows it were never seen. Calliope is
+   required to retry that request up to three times, so the path should be verified on a PC without
+   the driver before the client rule is relied on.
+
+6. **A failed pairing left no trace in the log.** `src/mic_pairing.cpp` held no log statement at
+   all, and `submit_pin` at `src/mic.cpp:528` returned `std::nullopt` in silence, so a wrong or
+   expired PIN was indistinguishable from a request that never arrived. This was found by being
+   unable to answer "it gave me a PIN and pairing failed" from the log on 2026-09-20. **Fixed**:
+   an arriving request, a request refused because four are already pending, and a PIN matching no
+   pending request are each logged. Verified live afterwards, a request from a Mac appearing 11
+   seconds before the pairing it completed.
 
 ## What comes next
 
