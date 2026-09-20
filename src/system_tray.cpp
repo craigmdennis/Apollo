@@ -442,11 +442,11 @@ namespace system_tray {
   }
 
   void update_tray_mic_connected(std::string device_name) {
-    mic_notification("Microphone connected", "Microphone connected: " + device_name, nullptr);
+    mic_notification("Microphone connected", device_name, nullptr);
   }
 
   void update_tray_mic_disconnected(std::string device_name, std::string reason) {
-    auto text = "Microphone disconnected: " + device_name;
+    auto text = device_name;
     if (!reason.empty()) {
       text += " (" + reason + ")";
     }

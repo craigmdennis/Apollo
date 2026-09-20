@@ -593,7 +593,9 @@ namespace platf {
     none,
     unsupported,  ///< This platform has no virtual microphone
     device_missing,  ///< The virtual microphone is not installed
-    device_open_failed  ///< The virtual microphone exists and cannot be opened
+    device_open_failed,  ///< The virtual microphone exists and cannot be opened
+    // Appended rather than grouped with device_missing, so the existing values keep their numbers.
+    device_hidden_in_session  ///< Installed on the PC, but not visible in the session Apollo runs in
   };
 
   /**

@@ -306,14 +306,25 @@ namespace platf {
 
         previous_default = default_capture_id(device_enum.get());
 
+        // Windows gives a Remote Desktop session redirected audio endpoints and hides the PC's own
+        // devices from it, so the Steam Streaming Microphone cannot be found however well it is
+        // installed. Installing the driver cannot fix that, and the attempt only logs a misleading
+        // complaint about privileges, so it is skipped and the real reason is reported instead.
+        auto remote_session = GetSystemMetrics(SM_REMOTESESSION) != 0;
+
         auto found_render = find_steam_endpoint(device_enum.get(), eRender);
-        if (!found_render && install_steam_mic_driver()) {
+        if (!found_render && !remote_session && install_steam_mic_driver()) {
           found_render = find_steam_endpoint(device_enum.get(), eRender);
         }
         auto found_capture = find_steam_endpoint(device_enum.get(), eCapture);
         if (!found_render || !found_capture) {
-          BOOST_LOG(warning) << "Remote microphone: the Steam Streaming Microphone was not found. Install Steam on this PC."sv;
-          error_out = virtual_mic_error_e::device_missing;
+          if (remote_session) {
+            BOOST_LOG(warning) << "Remote microphone: the Steam Streaming Microphone is installed but is not visible inside a Remote Desktop session. Apollo must run in the session attached to the PC's own screen."sv;
+            error_out = virtual_mic_error_e::device_hidden_in_session;
+          } else {
+            BOOST_LOG(warning) << "Remote microphone: the Steam Streaming Microphone was not found. Install Steam on this PC."sv;
+            error_out = virtual_mic_error_e::device_missing;
+          }
           return false;
         }
         render_id = *found_render;

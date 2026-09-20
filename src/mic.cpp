@@ -71,6 +71,9 @@ namespace mic {
       protocol::error_e error_code = protocol::error_e::none;  ///< Sent in every pong
       protocol::error_e notified = protocol::error_e::none;  ///< Last error shown in the tray
 
+      // Two platform failures share one wire code, so the reason is kept to pick the tray text.
+      platf::virtual_mic_error_e vmic_error = platf::virtual_mic_error_e::none;
+
       // Members die in reverse order. vmic is declared last, so the virtual microphone and its
       // render thread are gone before playout, which holds the decoder that thread uses.
       playout_t playout;
@@ -116,11 +119,15 @@ namespace mic {
 #endif
     }
 
-    void notify_error(protocol::error_e error_code) {
+    void notify_error(protocol::error_e error_code, platf::virtual_mic_error_e vmic_error) {
       std::string text;
       switch (error_code) {
         case protocol::error_e::device_missing:
-          text = "Apollo cannot find the Steam Streaming Microphone. Install Steam on this PC, then connect again from Calliope.";
+          if (vmic_error == platf::virtual_mic_error_e::device_hidden_in_session) {
+            text = "Apollo cannot reach the Steam Streaming Microphone from a Remote Desktop session. Use the PC's own screen, then connect again from Calliope.";
+          } else {
+            text = "Apollo cannot find the Steam Streaming Microphone. Install Steam on this PC, then connect again from Calliope.";
+          }
           break;
         case protocol::error_e::device_open_failed:
           text = "Another program on this PC is blocking the Steam Streaming Microphone. Close it, then connect again from Calliope.";
@@ -153,7 +160,7 @@ namespace mic {
      */
     void report_error(session_t &target) {
       if (target.error_code != target.notified) {
-        notify_error(target.error_code);
+        notify_error(target.error_code, target.vmic_error);
         target.notified = target.error_code;
       }
     }
@@ -222,7 +229,12 @@ namespace mic {
         if (vmic_error == platf::virtual_mic_error_e::unsupported) {
           return session_error_e::unsupported;
         }
-        if (vmic_error == platf::virtual_mic_error_e::device_missing) {
+        next->vmic_error = vmic_error;
+
+        // A hidden device and a missing one share the wire code, because the pong error codes are
+        // part of the Calliope contract. Only the text the host shows differs.
+        if (vmic_error == platf::virtual_mic_error_e::device_missing ||
+            vmic_error == platf::virtual_mic_error_e::device_hidden_in_session) {
           next->error_code = protocol::error_e::device_missing;
         } else if (vmic_error == platf::virtual_mic_error_e::device_open_failed) {
           next->error_code = protocol::error_e::device_open_failed;
@@ -508,6 +520,12 @@ namespace mic {
         notify = true;
       }
     }
+
+    if (request_id) {
+      BOOST_LOG(info) << "Remote microphone: pairing request from ["sv << name << "] at "sv << address;
+    } else {
+      BOOST_LOG(warning) << "Remote microphone: refused a pairing request from ["sv << name << "] at "sv << address << ". Four requests are already pending."sv;
+    }
 #if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
     if (notify) {
       system_tray::update_tray_mic_pair_request();
@@ -526,6 +544,9 @@ namespace mic {
     auto now = steady::now();
     auto match = pairing.submit_pin(pin, fingerprint, now);
     if (!match) {
+      // Without this line a failed pairing leaves no trace at all, which makes "it gave me a PIN
+      // and pairing failed" impossible to answer from the log.
+      BOOST_LOG(warning) << "Remote microphone: a PIN was submitted that matched no pending pairing request. The PIN was wrong, or the request had already expired."sv;
       return std::nullopt;
     }
 
