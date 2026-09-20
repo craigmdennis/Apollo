@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Work in progress: remote microphone
+
+On branch `feature/calliope-mic`, read `docs/superpowers/2026-09-20-calliope-mic-handoff.md` first. It states the status, the Windows verification steps, and the next steps. Remove this section when the branch merges.
+
 ## What this is
 
 Apollo is a self-hosted game-stream host (low-latency desktop streaming with hardware
