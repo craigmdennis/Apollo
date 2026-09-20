@@ -58,20 +58,36 @@ def fingerprint():
         return hashlib.sha256(ssl.PEM_cert_to_DER_cert(handle.read())).digest()
 
 
+def post(path, **kwargs):
+    """Send a POST and return the JSON reply. On a failure, print the host's own
+    error text and stop, so a wrong host or a rejected request is readable."""
+    reply = http.post(f"{base}{path}", **kwargs)
+    if reply.ok:
+        return reply.json()
+    try:
+        message = reply.json().get("error", reply.text)
+    except ValueError:
+        message = reply.text
+    hint = ""
+    if reply.status_code == 404 or message == "Bad Request":
+        hint = ("\nAn Apollo build without the microphone routes answers this way."
+                " Check that the feature/calliope-mic build is the one running.")
+    sys.exit(f"POST {path} failed: HTTP {reply.status_code}: {message}{hint}")
+
+
 def pair():
     pin = f"{secrets.randbelow(10000):04d}"
     nonce = secrets.token_bytes(16)
     proof = hmac.new(pin.encode(), fingerprint() + nonce, hashlib.sha256).digest()
-    reply = http.post(f"{base}/api/mic/pair", json={
+    reply = post("/api/mic/pair", json={
         "name": "Reference sender",
         "nonce": base64.b64encode(nonce).decode(),
         "proof": base64.b64encode(proof).decode(),
-    }).json()
+    })
     print(f"PIN: {pin}  (enter it on the Microphone tab of the PIN page)")
     while True:
         time.sleep(2)
-        status = http.post(f"{base}/api/mic/pair/status",
-                           json={"request_id": reply["request_id"]}).json()
+        status = post("/api/mic/pair/status", json={"request_id": reply["request_id"]})
         if status["state"] == "paired":
             return status["token"]
         if status["state"] == "expired":
@@ -91,7 +107,7 @@ else:
     json.dump({"token": token}, open(state_file, "w"))
 
 auth = {"Authorization": f"Bearer {token}"}
-session = http.post(f"{base}/api/mic/session", headers=auth).json()
+session = post("/api/mic/session", headers=auth)
 print("session:", {k: v for k, v in session.items() if k != "key"})
 key = base64.b64decode(session["key"])
 sid = session["session_id"]
