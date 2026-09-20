@@ -522,4 +522,12 @@ namespace platf {
 
     return audio;
   }
+
+  std::unique_ptr<virtual_mic_t> virtual_mic([[maybe_unused]] virtual_mic_fill_t fill, virtual_mic_error_e &error_out) {
+    error_out = virtual_mic_error_e::unsupported;
+    return nullptr;
+  }
+
+  void restore_default_capture([[maybe_unused]] const std::string &device_id) {
+  }
 }  // namespace platf

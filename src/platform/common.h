@@ -552,6 +552,57 @@ namespace platf {
     virtual ~mic_t() = default;
   };
 
+  /// The longest Opus packet is 120 ms, which is 5760 samples at 48 kHz.
+  constexpr std::size_t VIRTUAL_MIC_MAX_PACKET_SAMPLES = 5760;
+
+  /**
+   * @brief Supplies decoded 48 kHz mono float audio to a virtual microphone, one packet per call.
+   * @param mono_out Receives the samples. Holds at least VIRTUAL_MIC_MAX_PACKET_SAMPLES.
+   * @return The number of samples written, or 0 when nothing is ready to play.
+   *
+   * Called only from the virtual microphone's render thread.
+   */
+  using virtual_mic_fill_t = std::function<std::size_t(float *mono_out, std::size_t capacity)>;
+
+  /**
+   * @brief A host capture device that plays audio supplied by Apollo.
+   *
+   * On Windows this is the Steam Streaming Microphone. Creating one makes it the default
+   * capture device. Destroying it stops the render thread and restores the previous default.
+   */
+  class virtual_mic_t {
+  public:
+    /**
+     * @return false after the device failed and could not be reopened.
+     */
+    virtual bool healthy() const = 0;
+
+    /**
+     * @brief The default capture device id that was active before this object took over.
+     */
+    virtual std::string previous_default_capture() const = 0;
+
+    virtual ~virtual_mic_t() = default;
+  };
+
+  enum class virtual_mic_error_e {
+    none,
+    unsupported,  ///< This platform has no virtual microphone
+    device_missing,  ///< The virtual microphone is not installed
+    device_open_failed  ///< The virtual microphone exists and cannot be opened
+  };
+
+  /**
+   * @brief Open the virtual microphone on the calling thread and start pulling audio from fill.
+   * @param error_out Receives the reason when the result is null.
+   */
+  std::unique_ptr<virtual_mic_t> virtual_mic(virtual_mic_fill_t fill, virtual_mic_error_e &error_out);
+
+  /**
+   * @brief Make the given device the default capture device. Used after a crash during a mic session.
+   */
+  void restore_default_capture(const std::string &device_id);
+
   class audio_control_t {
   public:
     virtual int set_sink(const std::string &sink) = 0;
