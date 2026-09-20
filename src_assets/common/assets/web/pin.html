@@ -21,10 +21,13 @@
   <div id="content" class="container content-container d-flex flex-column align-items-center">
     <ul class="nav nav-pills pin-tab-bar justify-content-center">
       <li class="nav-item">
-        <a class="nav-link" :class="{active: currentTab !== '#PIN'}" href="#OTP" @click.prevent="switchTab('OTP')">{{ $t('pin.otp_pairing') }}</a>
+        <a class="nav-link" :class="{active: currentTab !== '#PIN' && currentTab !== '#MIC'}" href="#OTP" @click.prevent="switchTab('OTP')">{{ $t('pin.otp_pairing') }}</a>
       </li>
       <li class="nav-item">
         <a class="nav-link" :class="{active: currentTab === '#PIN'}" href="#PIN" @click.prevent="switchTab('PIN')">{{ $t('pin.pin_pairing') }}</a>
+      </li>
+      <li class="nav-item">
+        <a class="nav-link" :class="{active: currentTab === '#MIC'}" href="#MIC" @click.prevent="switchTab('MIC')">{{ $t('pin.mic_pairing') }}</a>
       </li>
     </ul>
     <form v-if="currentTab === '#PIN'" class="form d-flex flex-column align-items-center" id="form" @submit.prevent="registerDevice">
@@ -34,6 +37,15 @@
         <button class="btn btn-primary">{{ $t('pin.send') }}</button>
       </div>
       <div id="status"></div>
+    </form>
+    <form v-else-if="currentTab === '#MIC'" class="form d-flex flex-column align-items-center" @submit.prevent="registerMic">
+      <div class="card flex-column d-flex p-4 mb-4">
+        <p class="text-center">{{ $t('pin.mic_intro') }}</p>
+        <input type="text" pattern="\d*" :placeholder="`${$t('navbar.pin')}`" v-model="micPin" autofocus class="form-control mt-2" required />
+        <input type="text" :placeholder="`${$t('pin.device_name')}`" v-model="micName" class="form-control my-4" />
+        <button class="btn btn-primary">{{ $t('pin.send') }}</button>
+      </div>
+      <div v-if="micMessage" class="alert" :class="['alert-' + micStatus]" role="alert">{{ micMessage }}</div>
     </form>
     <form v-else class="form d-flex flex-column align-items-center" @submit.prevent="requestOTP">
       <div class="card flex-column d-flex p-4 mb-4">
@@ -205,6 +217,26 @@
         <div class="list-group-item p-3 text-center"><em>{{ $t('pin.unpair_single_no_devices') }}</em></div>
       </ul>
     </div>
+    <!-- Manage microphones -->
+    <div class="card my-4 align-self-stretch">
+      <div class="card-body">
+        <div class="p-2">
+          <h2 class="me-auto">{{ $t('pin.mic_devices') }}</h2>
+          <p class="mt-3">{{ $t('pin.mic_devices_desc') }}</p>
+        </div>
+      </div>
+      <ul class="list-group list-group-flush list-group-item-light" v-if="mics.length > 0">
+        <div v-for="mic in mics" :key="mic.uuid" class="list-group-item d-flex align-items-center p-3">
+          <span class="me-2">{{ mic.name }}</span>
+          <span v-if="mic.connected" class="badge bg-success me-auto">{{ $t('pin.mic_connected') }}</span>
+          <span v-else class="me-auto"></span>
+          <div class="me-2 btn btn-danger" @click="removeMic(mic)"><i class="fas fa-trash"></i></div>
+        </div>
+      </ul>
+      <ul v-else class="list-group list-group-flush list-group-item-light">
+        <div class="list-group-item p-3 text-center"><em>{{ $t('pin.mic_no_devices') }}</em></div>
+      </ul>
+    </div>
   </div>
 </body>
 
@@ -368,6 +400,11 @@
       hostName: '',
       permissionGroups,
       clients: [],
+      mics: [],
+      micPin: '',
+      micName: '',
+      micMessage: '',
+      micStatus: 'success',
       showApplyMessage: false,
       unpairAllPressed: false,
       unpairAllStatus: null
@@ -396,14 +433,54 @@
     },
     created() {
       this.refreshClients();
+      this.refreshMics();
     },
     methods: {
       switchTab(currentTab) {
         location.hash = currentTab;
         const clients = this.clients;
-        Object.assign(this, data(), { clients });
+        const mics = this.mics;
+        Object.assign(this, data(), { clients, mics });
         hostInfoCache = null;
         clearTimeout(resetOTPTimeout);
+      },
+      registerMic() {
+        this.micMessage = '';
+        fetch("./api/mic/pin", {
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          method: 'POST',
+          body: JSON.stringify({ pin: this.micPin, name: this.micName })
+        })
+          .then((response) => response.json())
+          .then((response) => {
+            if (response.status === true) {
+              this.micStatus = 'success';
+              this.micMessage = this.i18n.t('pin.mic_pair_success', { name: response.name });
+              this.micPin = '';
+              this.micName = '';
+              this.refreshMics();
+            } else {
+              this.micStatus = 'danger';
+              this.micMessage = this.i18n.t('pin.mic_pair_failure');
+            }
+          });
+      },
+      removeMic(mic) {
+        if (!confirm(this.i18n.t('pin.mic_remove_confirm', { name: mic.name }))) return;
+        fetch("./api/mic/remove", {
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          method: 'POST',
+          body: JSON.stringify({ uuid: mic.uuid })
+        }).then(() => this.refreshMics());
+      },
+      refreshMics() {
+        fetch("./api/mic/list", { credentials: 'include' })
+          .then((response) => response.json())
+          .then((response) => {
+            this.mics = response.status && response.named_mics ? response.named_mics : [];
+          });
       },
       editHost() {
         this.editingHost = !this.editingHost;

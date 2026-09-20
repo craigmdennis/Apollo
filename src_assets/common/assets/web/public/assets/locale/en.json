@@ -558,7 +558,16 @@
     "unpair_all_error": "Error while unpairing",
     "unpair_single_no_devices": "There are no paired devices.",
     "unpair_single_success": "However, the device(s) may still be in an active session. Use the 'Force Close' button above to end any open sessions.",
-    "unpair_single_unknown": "Unknown Client"
+    "unpair_single_unknown": "Unknown Client",
+    "mic_pairing": "Microphone",
+    "mic_intro": "Pair a phone or Mac running Calliope as a microphone for this PC. Open Calliope, choose this PC, and enter the PIN it shows.",
+    "mic_pair_success": "{name} is paired as a microphone. Tap Connect in Calliope to start. While connected, Apollo makes it the default microphone on this PC.",
+    "mic_pair_failure": "Pairing failed. Check the PIN in Calliope. After three wrong PINs, tap Get a new PIN in Calliope.",
+    "mic_devices": "Microphones",
+    "mic_devices_desc": "Phones and Macs paired through Calliope. These are separate from the streaming devices above.",
+    "mic_no_devices": "There are no paired microphones.",
+    "mic_connected": "Connected",
+    "mic_remove_confirm": "Remove {name}? It will disconnect now and must be paired again to reconnect."
   },
   "resource_card": {
     "github_discussions": "GitHub Discussions",
