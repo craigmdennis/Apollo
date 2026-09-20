@@ -266,8 +266,17 @@ null. When the factory returns null, `POST /api/mic/session` returns HTTP 501.
 
 Steam stores the driver beside the speaker driver that Apollo already installs:
 `%CommonProgramFiles(x86)%\Steam\drivers\Windows10\x64\SteamStreamingMicrophone.inf`.
-Milestone 2 confirms the file name on the target PC before the install code is
-written. The install runs at the first mic session and never at stream start.
+The path is confirmed by the driver package and by Apollo pull request #1428. The
+install runs at the first mic session, never at stream start, and only when
+`install_steam_drivers` is enabled.
+
+The Steam driver copies audio from its render endpoint to its capture endpoint
+with no conversion. Before the render client is initialised, the writer sets both
+endpoints to 2 channels, 32-bit PCM, 48000 Hz. A format mismatch between the two
+endpoints produces garbled voice. The device buffer is 200 ms and is primed with
+silence before the client starts. The writer reopens the client when Windows
+invalidates the device. Evidence is in
+`docs/superpowers/research/2026-09-20-windows-virtual-mic.md`.
 
 ### Mic device store
 
@@ -285,8 +294,20 @@ written. The install runs at the first mic session and never at stream start.
 - At launch, the mic thread starts only when `mic_state.json` holds a mic device.
   Otherwise the mic thread starts after the first successful pairing.
 - The receive loop decrypts packets and places Opus frames in the jitter buffer.
-- The jitter buffer holds a fixed 40 ms before playout starts. Above 200 ms of
+- Playout is pull-based. The render thread of the virtual microphone requests one
+  decoded packet at a time, so the audio device clock is the only playout clock.
+  A timer is unsuitable: the default Windows timer granularity is 15.625 ms, and
+  Apollo raises it only while a stream runs.
+- The render thread requests packets only while the device holds less than 40 ms,
+  so the jitter buffer holds the delay and the device buffer adds none.
+- The jitter buffer holds a fixed 40 ms before playout starts. Above 100 ms of
   queued audio, the jitter buffer drops the oldest frames.
+- While playing, an empty jitter buffer conceals up to 5 frames with Opus loss
+  concealment, then returns to prebuffering. Opus concealment is silent by the
+  fifth frame, so a late packet costs no restart of the 40 ms prebuffer.
+- The decoder state is reset when playout restarts after a silent period.
+- Evidence for these choices is in
+  `docs/superpowers/research/2026-09-20-voice-playout.md`.
 - `main.cpp` starts the mic module after the config server and stops it before
   exit. The stop path restores the default capture device.
 
@@ -324,18 +345,24 @@ named `Calliope`.
 ### Platform features used in place of dependencies
 
 - CryptoKit supplies AES-GCM and HMAC-SHA256.
-- `AVAudioConverter` supplies Opus encoding. Milestone 3 tests whether it produces
-  exact 20 ms packets. When it does not, libopus through Swift Package Manager
-  replaces it.
+- `AVAudioConverter` supplies Opus encoding at 960 frames per packet and a constant
+  32000 bits per second. A test run on macOS produced one 20 ms frame per packet,
+  and stock libopus decoded every packet. A device test confirms that the encoder
+  exists on the iPhone. When it does not, libopus through Swift Package Manager
+  replaces it on iOS.
 - `NWBrowser` supplies Bonjour discovery, and `NWConnection` supplies UDP.
 - `SMAppService` supplies the login item.
 
 ### iOS behaviour
 
-- The audio session omits the Bluetooth input option. iOS then uses the built-in
-  microphone and does not take AirPods from another device such as an Apple TV.
-- Voice processing is enabled. It supplies noise suppression and makes Voice
-  Isolation available in Control Center.
+- The audio session uses the record category with no options, and sets the
+  built-in microphone as the preferred input after activation. With no Bluetooth
+  input option, iOS uses the built-in microphone. A device test confirms that
+  AirPods stay connected to another device such as an Apple TV.
+- Voice processing stays off. It requires a play-and-record session, which implies
+  the voice chat mode and the Bluetooth hands-free option. That combination routes
+  capture to AirPods, which is the behaviour this design exists to prevent.
+- Evidence is in `docs/superpowers/research/2026-09-20-calliope-apple-frameworks.md`.
 - The background audio mode keeps capture running while the phone is locked.
 - An error produces a haptic in the foreground and a notification when the phone
   is locked.

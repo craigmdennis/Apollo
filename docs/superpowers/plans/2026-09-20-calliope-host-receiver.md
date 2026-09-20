@@ -4,11 +4,11 @@
 
 **Goal:** Apollo on Windows receives encrypted microphone audio from a paired mic device and plays it into the Steam Streaming Microphone, with no change to streaming.
 
-**Architecture:** Four platform-neutral units (packet protocol, jitter buffer, mic device store, pairing state) are built and tested first, on any machine. A Windows writer plays PCM into the virtual microphone. An orchestrator in `src/mic.cpp` owns one thread, one UDP socket, and one mic session. Seven config server routes, four tray functions, and a Microphone tab on the PIN page connect the orchestrator to the outside.
+**Architecture:** Four platform-neutral units (packet protocol, jitter buffer, mic device store, pairing state) are built and tested first, on any machine. A Windows writer owns the render thread and pulls decoded audio through a callback, so the audio device clock is the only playout clock. An orchestrator in `src/mic.cpp` owns one thread, one UDP socket, and one mic session. Seven config server routes, four tray functions, and a Microphone tab on the PIN page connect the orchestrator to the outside.
 
 **Tech stack:** C++23, OpenSSL (AES-128-GCM, HMAC-SHA256), Boost.Asio UDP, libopus, nlohmann/json, WASAPI, GoogleTest, Vue 3.
 
-**Spec:** `docs/superpowers/specs/2026-09-20-calliope-mic-sidecar-design.md`. This plan covers build-order items 1, 2, and the host half of item 5. The Calliope app has its own plan.
+**Spec:** `docs/superpowers/specs/2026-09-20-calliope-mic-sidecar-design.md`. Design evidence for the Windows writer and for playout is in `docs/superpowers/research/`. This plan covers build-order items 1, 2, and the host half of item 5. The Calliope app has its own plan.
 
 ## Global constraints
 
@@ -22,7 +22,9 @@
 - Audio payload: one Opus frame, 48 kHz, mono, 20 ms.
 - UDP port: `net::map_port(13)`.
 - Pairing limits: one pending request per source address, four in total, 120 second expiry, three wrong PINs cancel every pending request.
-- Jitter buffer: 40 ms prebuffer (2 frames), 200 ms maximum (10 frames).
+- Jitter buffer: 40 ms prebuffer (2 frames), 100 ms maximum (5 frames). While playing, an empty buffer conceals up to 5 frames, then returns to prebuffering.
+- Playout is pull-based: the virtual microphone's render thread requests one decoded packet at a time. No timer drives playout.
+- Both Steam Streaming Microphone endpoints are set to 2 channels, 32-bit PCM, 48000 Hz before the render client is initialised.
 - A mic session ends after 5 seconds with no valid packet.
 - Pong error codes: 0 none, 1 virtual microphone missing, 2 virtual microphone cannot be opened, 3 repeated decode failures, 4 replaced by another mic device.
 - C++ follows `.clang-format` exactly: 2-space indent, no column limit, right-aligned pointers.
@@ -47,8 +49,8 @@ The Apollo contributing rules state that AI-generated tests are not trusted on t
 | `src/mic_jitter.h`, `.cpp` | Orders audio frames, reports lost frames, enforces prebuffer and maximum depth |
 | `src/mic_store.h`, `.cpp` | Reads and writes `mic_state.json`, hashes and checks mic tokens |
 | `src/mic_pairing.h`, `.cpp` | Pending pairing requests, limits, expiry, PIN check |
-| `src/mic.h`, `.cpp` | Orchestrator: thread, UDP socket, mic session, Opus decode, tray calls |
-| `src/platform/windows/mic_write.cpp` | WASAPI writer for the virtual microphone, driver install, default capture device |
+| `src/mic.h`, `.cpp` | Orchestrator: thread, UDP socket, mic session, the fill callback that decodes Opus, tray calls |
+| `src/platform/windows/mic_write.cpp` | WASAPI render thread that pulls audio, endpoint format normalisation, driver install, default capture device |
 | `src/platform/common.h` | `virtual_mic_t` interface and factory declarations |
 | `src/platform/linux/audio.cpp`, `src/platform/macos/microphone.mm` | Factories that report "unsupported" |
 | `src/confighttp.cpp` | Seven routes, LAN origin rule, allowlist entry |
@@ -1588,6 +1590,149 @@ git commit -m "feat(mic): add pairing state with PIN proof and limits"
 
 ---
 
+### Task 10: Jitter buffer retune from the playout research
+
+Run this task after Task 4 and before Task 5.
+
+**Files:**
+- Modify: `src/mic_jitter.h`
+- Modify: `src/mic_jitter.cpp`
+- Modify: `tests/unit/test_mic_jitter.cpp`
+
+**Interfaces:**
+- Consumes: `mic::jitter_buffer_t` from Task 2.
+- Produces: the same interface with two behaviour changes.
+  - `MAX_FRAMES` is 5 (100 ms).
+  - New constant `static constexpr int MAX_EMPTY_CONCEAL = 5`. While playing, an empty buffer returns `lost` for up to 5 consecutive calls, then returns `wait` and restarts the prebuffer.
+
+Evidence: `docs/superpowers/research/2026-09-20-voice-playout.md`. With one playout clock, 200 ms of queue is delay with no benefit, and the report's delay guidance puts the cap at 1.5 to 2 times the 40 ms prebuffer. Neither reference implementation restarts its prebuffer on a momentary underrun, and Opus loss concealment is silent by the fifth frame, so 5 concealed frames bound the cost of one late packet.
+
+- [ ] **Step 1: Change the tests first**
+
+In `tests/unit/test_mic_jitter.cpp`, replace the test `DropsOldestAboveMaximum` with:
+
+```cpp
+TEST(MicJitter, DropsOldestAboveMaximum) {
+  jitter_buffer_t buffer;
+  for (std::uint32_t sequence = 0; sequence < 7; ++sequence) {
+    buffer.push(sequence, frame(static_cast<std::uint8_t>(sequence)));
+  }
+  EXPECT_EQ(buffer.size(), jitter_buffer_t::MAX_FRAMES);
+  auto first = buffer.pop();
+  ASSERT_EQ(first.kind, pop_e::frame);
+  EXPECT_EQ(first.payload, frame(2));
+}
+```
+
+Replace the test `EmptyBufferRestartsPrebuffer` with these two tests:
+
+```cpp
+TEST(MicJitter, EmptyBufferConcealsThenRestartsPrebuffer) {
+  jitter_buffer_t buffer;
+  buffer.push(0, frame(0));
+  buffer.push(1, frame(1));
+  buffer.pop();
+  buffer.pop();
+  for (int call = 0; call < jitter_buffer_t::MAX_EMPTY_CONCEAL; ++call) {
+    EXPECT_EQ(buffer.pop().kind, pop_e::lost) << "call " << call;
+  }
+  EXPECT_EQ(buffer.pop().kind, pop_e::wait);
+  buffer.push(40, frame(4));
+  EXPECT_EQ(buffer.pop().kind, pop_e::wait);
+  buffer.push(41, frame(5));
+  auto next = buffer.pop();
+  ASSERT_EQ(next.kind, pop_e::frame);
+  EXPECT_EQ(next.payload, frame(4));
+}
+
+TEST(MicJitter, ResumesWithoutPrebufferAfterAShortGap) {
+  jitter_buffer_t buffer;
+  buffer.push(0, frame(0));
+  buffer.push(1, frame(1));
+  buffer.pop();
+  buffer.pop();
+  EXPECT_EQ(buffer.pop().kind, pop_e::lost);  // sequence 2 concealed
+  EXPECT_FALSE(buffer.push(2, frame(2)));  // arrives after its concealment: late
+  EXPECT_TRUE(buffer.push(3, frame(3)));
+  auto next = buffer.pop();
+  ASSERT_EQ(next.kind, pop_e::frame);
+  EXPECT_EQ(next.payload, frame(3));
+}
+```
+
+- [ ] **Step 2: Run the tests and confirm the three fail**
+
+Run:
+
+```bash
+ninja -C build/mic_standalone && ./build/mic_standalone/test_mic_standalone --gtest_filter='MicJitter.*'
+```
+
+Expected: the build FAILS, because `MAX_EMPTY_CONCEAL` is not declared.
+
+- [ ] **Step 3: Change the header**
+
+In `src/mic_jitter.h`, replace the line `static constexpr std::size_t MAX_FRAMES = 10;  // 200 ms` with:
+
+```cpp
+    static constexpr std::size_t MAX_FRAMES = 5;  // 100 ms
+    static constexpr int MAX_EMPTY_CONCEAL = 5;  // Opus concealment is silent by the fifth frame
+```
+
+In the private section, after `std::uint32_t next_sequence = 0;`, add:
+
+```cpp
+    int empty_pops = 0;
+```
+
+Change the comment on `pop_e::wait` to `///< Nothing to play: prebuffering, or the talkspurt ended` and the comment on `pop_e::lost` to `///< The next sequence is missing or the buffer ran dry. Run loss concealment.`
+
+- [ ] **Step 4: Change the implementation**
+
+In `src/mic_jitter.cpp`, in `pop()`, replace:
+
+```cpp
+    if (frames.empty()) {
+      started = false;
+      return {pop_e::wait, {}};
+    }
+```
+
+with:
+
+```cpp
+    if (frames.empty()) {
+      // A momentary underrun is concealed. Restarting the prebuffer for it would add a 40 ms stall.
+      if (++empty_pops > MAX_EMPTY_CONCEAL) {
+        started = false;
+        empty_pops = 0;
+        return {pop_e::wait, {}};
+      }
+      ++next_sequence;
+      return {pop_e::lost, {}};
+    }
+    empty_pops = 0;
+```
+
+- [ ] **Step 5: Run the tests and confirm they pass**
+
+Run:
+
+```bash
+ninja -C build/mic_standalone && ./build/mic_standalone/test_mic_standalone
+```
+
+Expected: 37 tests from 4 suites, all PASS. `MicJitter` has 10 tests.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/mic_jitter.h src/mic_jitter.cpp tests/unit/test_mic_jitter.cpp
+git commit -m "feat(mic): cap the jitter buffer at 100 ms and conceal short underruns"
+```
+
+---
+
 ### Task 5: Platform interface and the Windows virtual microphone writer
 
 **Files:**
@@ -1598,35 +1743,59 @@ git commit -m "feat(mic): add pairing state with PIN proof and limits"
 - Modify: `cmake/compile_definitions/windows.cmake:61`
 
 **Interfaces:**
-- Consumes: `util::safe_ptr`, `platf::from_utf8`, `platf::to_utf8` from `src/platform/windows/misc.h`, `IPolicyConfig` from `src/platform/windows/PolicyConfig.h`.
+- Consumes: `util::safe_ptr`, `platf::from_utf8`, `platf::to_utf8` from `src/platform/windows/misc.h`, `IPolicyConfig` from `src/platform/windows/PolicyConfig.h`, `config::audio.install_steam_drivers`.
 - Produces, in namespace `platf`:
-  - `class virtual_mic_t` with `virtual bool write(const float *mono_samples, std::size_t count) = 0` and `virtual std::string previous_default_capture() const = 0`
+  - `constexpr std::size_t VIRTUAL_MIC_MAX_PACKET_SAMPLES = 5760`
+  - `using virtual_mic_fill_t = std::function<std::size_t(float *mono_out, std::size_t capacity)>`. The callback decodes one packet into `mono_out` and returns the sample count. It returns 0 when nothing is ready. The render thread is the only caller.
+  - `class virtual_mic_t` with `virtual bool healthy() const = 0` and `virtual std::string previous_default_capture() const = 0`
   - `enum class virtual_mic_error_e { none, unsupported, device_missing, device_open_failed }`
-  - `std::unique_ptr<virtual_mic_t> virtual_mic(virtual_mic_error_e &error)`. The caller's thread owns the returned object. Destruction restores the previous default capture device.
+  - `std::unique_ptr<virtual_mic_t> virtual_mic(virtual_mic_fill_t fill, virtual_mic_error_e &error_out)`. Destruction joins the render thread and restores the previous default capture device.
   - `void restore_default_capture(const std::string &device_id)`
 
 This task has no unit test. WASAPI and the Steam driver exist only on the Windows PC, so the check is a Windows build followed by the manual verification in Task 9.
 
-The device lookup and the event-driven render loop are adapted from Apollo pull request #1428, which is GPL-3.0 like Apollo. The adaptation drops that pull request's Opus decode and packet queue, because `src/mic.cpp` owns those.
+Design evidence is in `docs/superpowers/research/2026-09-20-windows-virtual-mic.md` and `docs/superpowers/research/2026-09-20-voice-playout.md`. The points that shape this file:
+
+- **Pull playout.** The WASAPI render event is the only playout clock. The render thread asks the fill callback for one packet at a time. No timer and no sample queue exist between the jitter buffer and the device.
+- **Device queue target.** The render thread requests packets only while the device holds less than 40 ms. The jitter buffer therefore holds the delay, and the device buffer does not add to it.
+- **Forced endpoint format.** The Steam driver copies audio from its render endpoint to its capture endpoint with no conversion. Both endpoints are set to 2 channels, 32-bit PCM, 48000 Hz through `IPolicyConfig::SetDeviceFormat`. A mismatch between the two produces garbled voice. The device format uses `KSDATAFORMAT_SUBTYPE_PCM`, because the float subtype makes `Initialize` fail with `0x88890008`. The stream format is float.
+- **200 ms device buffer, primed with silence.** A 100 ms buffer underruns at a 20 ms packet cadence. Half the buffer is filled with silence before `Start()`.
+- **Recovery.** `AUDCLNT_E_DEVICE_INVALIDATED`, `AUDCLNT_E_RESOURCES_INVALIDATED`, and `AUDCLNT_E_SERVICE_NOT_RUNNING` reopen the client, and queued audio from before the reopen is discarded.
+- **Parameter name.** The factory's out-parameter is `error_out`. A parameter named `error` hides Apollo's Boost.Log `error` logger and breaks `BOOST_LOG(error)`.
+
+The device lookup, the format normalisation, and the render loop are adapted from Apollo pull request #1428, which is GPL-3.0 like Apollo.
 
 - [ ] **Step 1: Add the interface to `src/platform/common.h`**
+
+Confirm that `src/platform/common.h` includes `<functional>`. When it does not, add `#include <functional>` to its standard includes.
 
 After the closing brace of `class mic_t` and before `class audio_control_t`, add:
 
 ```cpp
+  /// The longest Opus packet is 120 ms, which is 5760 samples at 48 kHz.
+  constexpr std::size_t VIRTUAL_MIC_MAX_PACKET_SAMPLES = 5760;
+
   /**
-   * @brief A host capture device that plays PCM supplied by Apollo.
+   * @brief Supplies decoded 48 kHz mono float audio to a virtual microphone, one packet per call.
+   * @param mono_out Receives the samples. Holds at least VIRTUAL_MIC_MAX_PACKET_SAMPLES.
+   * @return The number of samples written, or 0 when nothing is ready to play.
+   *
+   * Called only from the virtual microphone's render thread.
+   */
+  using virtual_mic_fill_t = std::function<std::size_t(float *mono_out, std::size_t capacity)>;
+
+  /**
+   * @brief A host capture device that plays audio supplied by Apollo.
    *
    * On Windows this is the Steam Streaming Microphone. Creating one makes it the default
-   * capture device. Destroying it restores the previous default capture device.
+   * capture device. Destroying it stops the render thread and restores the previous default.
    */
   class virtual_mic_t {
   public:
     /**
-     * @brief Queue 48 kHz mono float samples for playout.
-     * @return false when the device stopped accepting audio.
+     * @return false after the device failed and could not be reopened.
      */
-    virtual bool write(const float *mono_samples, std::size_t count) = 0;
+    virtual bool healthy() const = 0;
 
     /**
      * @brief The default capture device id that was active before this object took over.
@@ -1644,10 +1813,10 @@ After the closing brace of `class mic_t` and before `class audio_control_t`, add
   };
 
   /**
-   * @brief Open the virtual microphone on the calling thread.
-   * @param error Receives the reason when the result is null.
+   * @brief Open the virtual microphone on the calling thread and start pulling audio from fill.
+   * @param error_out Receives the reason when the result is null.
    */
-  std::unique_ptr<virtual_mic_t> virtual_mic(virtual_mic_error_e &error);
+  std::unique_ptr<virtual_mic_t> virtual_mic(virtual_mic_fill_t fill, virtual_mic_error_e &error_out);
 
   /**
    * @brief Make the given device the default capture device. Used after a crash during a mic session.
@@ -1660,8 +1829,8 @@ After the closing brace of `class mic_t` and before `class audio_control_t`, add
 At the end of `namespace platf` in `src/platform/linux/audio.cpp`, add:
 
 ```cpp
-  std::unique_ptr<virtual_mic_t> virtual_mic(virtual_mic_error_e &error) {
-    error = virtual_mic_error_e::unsupported;
+  std::unique_ptr<virtual_mic_t> virtual_mic([[maybe_unused]] virtual_mic_fill_t fill, virtual_mic_error_e &error_out) {
+    error_out = virtual_mic_error_e::unsupported;
     return nullptr;
   }
 
@@ -1678,19 +1847,20 @@ Create `src/platform/windows/mic_write.cpp`:
 ```cpp
 /**
  * @file src/platform/windows/mic_write.cpp
- * @brief Plays PCM into the Steam Streaming Microphone and manages the default capture device.
+ * @brief Plays audio into the Steam Streaming Microphone and manages the default capture device.
  *
- * Device lookup and the event-driven render loop are adapted from Apollo pull request #1428
- * (logabell/apollo-microphone), licensed GPL-3.0.
+ * Device lookup, endpoint format normalisation, and the event-driven render loop are adapted
+ * from Apollo pull request #1428 (logabell/apollo-microphone), licensed GPL-3.0.
+ * Design evidence: docs/superpowers/research/2026-09-20-windows-virtual-mic.md and
+ * docs/superpowers/research/2026-09-20-voice-playout.md.
  */
 // standard includes
 #include <algorithm>
 #include <atomic>
 #include <cwctype>
-#include <deque>
-#include <mutex>
 #include <optional>
 #include <thread>
+#include <vector>
 
 // platform includes
 #include <Audioclient.h>
@@ -1701,6 +1871,7 @@ Create `src/platform/windows/mic_write.cpp`:
 
 // local includes
 #include "misc.h"
+#include "src/config.h"
 #include "src/logging.h"
 #include "src/platform/common.h"
 
@@ -1718,8 +1889,11 @@ namespace platf {
     constexpr PROPERTYKEY MIC_PKEY_INTERFACE_NAME {{0x026e516e, 0xb814, 0x414b, {0x83, 0xcd, 0x85, 0x6d, 0x6f, 0xef, 0x48, 0x22}}, 2};
 
     constexpr DWORD SAMPLE_RATE = 48000;
-    constexpr REFERENCE_TIME BUFFER_DURATION_100NS = 1000000;  // 100 ms
-    constexpr std::size_t MAX_QUEUED_SAMPLES = SAMPLE_RATE / 5;  // 200 ms
+    // 100 ms underruns at a 20 ms packet cadence (moonlight-mic raised its buffer to 200 ms for this).
+    constexpr REFERENCE_TIME BUFFER_DURATION_100NS = 2000000;
+    // Request packets only while the device holds less than 40 ms, so the jitter buffer holds the delay.
+    constexpr UINT32 TARGET_QUEUED_FRAMES = SAMPLE_RATE / 25;
+    // The device description and the interface name come from the driver INF and are not localised.
     constexpr auto DEVICE_NAME_PATTERN = L"steam streaming microphone";
 
 #if defined(__x86_64) || defined(__x86_64__) || defined(__amd64) || defined(__amd64__) || defined(_M_AMD64)
@@ -1750,6 +1924,7 @@ namespace platf {
     using audio_client_t = util::safe_ptr<IAudioClient, release_com<IAudioClient>>;
     using render_client_t = util::safe_ptr<IAudioRenderClient, release_com<IAudioRenderClient>>;
     using wstring_t = util::safe_ptr<WCHAR, co_task_free<WCHAR>>;
+    using wave_format_t = util::safe_ptr<WAVEFORMATEX, co_task_free<WAVEFORMATEX>>;
 
     std::wstring lower(std::wstring text) {
       std::transform(text.begin(), text.end(), text.begin(), [](wchar_t ch) {
@@ -1783,6 +1958,9 @@ namespace platf {
 
     /**
      * @brief Find the active Steam Streaming Microphone endpoint for one data flow.
+     *
+     * Render and capture are looked up separately. A match on the name alone once made
+     * another implementation write to the wrong endpoint.
      */
     std::optional<std::wstring> find_steam_endpoint(IMMDeviceEnumerator *device_enum, EDataFlow flow) {
       collection_t collection;
@@ -1803,9 +1981,7 @@ namespace platf {
         }
 
         for (const auto &key : {MIC_PKEY_FRIENDLY_NAME, MIC_PKEY_INTERFACE_NAME, MIC_PKEY_DEVICE_DESC}) {
-          auto name = lower(prop_string(props.get(), key));
-          // Steam also ships a 16-channel variant, which voice chat applications cannot use.
-          if (name.find(DEVICE_NAME_PATTERN) != std::wstring::npos && name.find(L"16ch") == std::wstring::npos) {
+          if (lower(prop_string(props.get(), key)).find(DEVICE_NAME_PATTERN) != std::wstring::npos) {
             return std::wstring {id.get()};
           }
         }
@@ -1817,6 +1993,10 @@ namespace platf {
      * @brief Install the Steam Streaming Microphone driver from the Steam folder.
      */
     bool install_steam_mic_driver() {
+      if (!config::audio.install_steam_drivers) {
+        return false;
+      }
+
       // MinGW's libnewdev.a is missing DiInstallDriverW(), so it is loaded at runtime.
       auto newdev = LoadLibraryExW(L"newdev.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
       if (!newdev) {
@@ -1834,7 +2014,19 @@ namespace platf {
       WCHAR driver_path[MAX_PATH] = {};
       ExpandEnvironmentStringsW(STEAM_MIC_DRIVER_PATH, driver_path, ARRAYSIZE(driver_path));
       if (!fn_DiInstallDriverW(nullptr, driver_path, 0, nullptr)) {
-        BOOST_LOG(warning) << "Remote microphone: could not install the Steam Streaming Microphone driver: "sv << GetLastError();
+        auto code = GetLastError();
+        switch (code) {
+          case ERROR_ACCESS_DENIED:
+            BOOST_LOG(warning) << "Remote microphone: administrator privileges are required to install the Steam Streaming Microphone"sv;
+            break;
+          case ERROR_FILE_NOT_FOUND:
+          case ERROR_PATH_NOT_FOUND:
+            BOOST_LOG(info) << "Remote microphone: the Steam audio drivers were not found. Steam is not installed on this PC."sv;
+            break;
+          default:
+            BOOST_LOG(warning) << "Remote microphone: could not install the Steam Streaming Microphone driver: "sv << code;
+            break;
+        }
         return false;
       }
 
@@ -1842,6 +2034,46 @@ namespace platf {
       // The audio subsystem needs time to publish the new endpoints.
       Sleep(5000);
       return true;
+    }
+
+    WAVEFORMATEXTENSIBLE make_format(bool ieee_float) {
+      WAVEFORMATEXTENSIBLE format {};
+      format.Format.wFormatTag = WAVE_FORMAT_EXTENSIBLE;
+      format.Format.nChannels = 2;
+      format.Format.nSamplesPerSec = SAMPLE_RATE;
+      format.Format.wBitsPerSample = 32;
+      format.Format.nBlockAlign = static_cast<WORD>(format.Format.nChannels * (format.Format.wBitsPerSample / 8));
+      format.Format.nAvgBytesPerSec = format.Format.nSamplesPerSec * format.Format.nBlockAlign;
+      format.Format.cbSize = sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX);
+      format.Samples.wValidBitsPerSample = 32;
+      format.SubFormat = ieee_float ? KSDATAFORMAT_SUBTYPE_IEEE_FLOAT : KSDATAFORMAT_SUBTYPE_PCM;
+      format.dwChannelMask = SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT;
+      return format;
+    }
+
+    bool is_normalised(const WAVEFORMATEX *format) {
+      return format && format->nChannels == 2 && format->nSamplesPerSec == SAMPLE_RATE && format->wBitsPerSample == 32;
+    }
+
+    /**
+     * @brief Set one endpoint to 2 channels, 32-bit PCM, 48000 Hz.
+     *
+     * The Steam driver copies render to capture with no conversion, so both endpoints need the
+     * same format. The device format must be PCM: the float subtype makes Initialize fail with
+     * 0x88890008.
+     */
+    void normalise_endpoint_format(IPolicyConfig *policy, const std::wstring &device_id) {
+      wave_format_t current;
+      if (SUCCEEDED(policy->GetDeviceFormat(device_id.c_str(), FALSE, &current)) && is_normalised(current.get())) {
+        return;
+      }
+
+      auto wanted = make_format(false);
+      WAVEFORMATEXTENSIBLE previous {};
+      auto status = policy->SetDeviceFormat(device_id.c_str(), &wanted.Format, &previous.Format);
+      if (FAILED(status)) {
+        BOOST_LOG(warning) << "Remote microphone: could not set the Steam Streaming Microphone format: 0x"sv << util::hex(status).to_string_view();
+      }
     }
 
     std::wstring default_capture_id(IMMDeviceEnumerator *device_enum) {
@@ -1864,101 +2096,74 @@ namespace platf {
       }
     }
 
+    bool is_recoverable(HRESULT status) {
+      return status == AUDCLNT_E_DEVICE_INVALIDATED ||
+             status == AUDCLNT_E_RESOURCES_INVALIDATED ||
+             status == AUDCLNT_E_SERVICE_NOT_RUNNING;
+    }
+
     class wasapi_virtual_mic_t: public virtual_mic_t {
     public:
+      explicit wasapi_virtual_mic_t(virtual_mic_fill_t fill):
+          fill {std::move(fill)} {
+      }
+
       ~wasapi_virtual_mic_t() override {
         stop = true;
         if (render_thread.joinable()) {
           render_thread.join();
         }
-        if (audio_client) {
-          audio_client->Stop();
-        }
+        close_client();
         if (!previous_default.empty()) {
           set_default_capture(previous_default);
         }
-        render_client.reset();
-        audio_client.reset();
         if (render_event) {
           CloseHandle(render_event);
         }
+        device_enum.reset();
         if (com_initialized) {
           CoUninitialize();
         }
       }
 
-      bool init(virtual_mic_error_e &error) {
+      bool init(virtual_mic_error_e &error_out) {
         com_initialized = SUCCEEDED(CoInitializeEx(nullptr, COINIT_MULTITHREADED | COINIT_SPEED_OVER_MEMORY));
 
-        auto device_enum = create_enumerator();
+        device_enum = create_enumerator();
         if (!device_enum) {
-          error = virtual_mic_error_e::device_open_failed;
+          error_out = virtual_mic_error_e::device_open_failed;
           return false;
         }
 
-        auto render_id = find_steam_endpoint(device_enum.get(), eRender);
-        if (!render_id && install_steam_mic_driver()) {
-          render_id = find_steam_endpoint(device_enum.get(), eRender);
+        auto found_render = find_steam_endpoint(device_enum.get(), eRender);
+        if (!found_render && install_steam_mic_driver()) {
+          found_render = find_steam_endpoint(device_enum.get(), eRender);
         }
-        auto capture_id = find_steam_endpoint(device_enum.get(), eCapture);
-        if (!render_id || !capture_id) {
+        auto found_capture = find_steam_endpoint(device_enum.get(), eCapture);
+        if (!found_render || !found_capture) {
           BOOST_LOG(warning) << "Remote microphone: the Steam Streaming Microphone was not found. Install Steam on this PC."sv;
-          error = virtual_mic_error_e::device_missing;
+          error_out = virtual_mic_error_e::device_missing;
           return false;
         }
+        render_id = *found_render;
 
-        device_t device;
-        if (FAILED(device_enum->GetDevice(render_id->c_str(), &device)) || !device ||
-            FAILED(device->Activate(IID_IAudioClient, CLSCTX_ALL, nullptr, (void **) &audio_client)) || !audio_client) {
-          error = virtual_mic_error_e::device_open_failed;
-          return false;
-        }
-
-        WAVEFORMATEXTENSIBLE format {};
-        format.Format.wFormatTag = WAVE_FORMAT_EXTENSIBLE;
-        format.Format.nChannels = 2;
-        format.Format.nSamplesPerSec = SAMPLE_RATE;
-        format.Format.wBitsPerSample = 32;
-        format.Format.nBlockAlign = static_cast<WORD>(format.Format.nChannels * sizeof(float));
-        format.Format.nAvgBytesPerSec = format.Format.nSamplesPerSec * format.Format.nBlockAlign;
-        format.Format.cbSize = sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX);
-        format.Samples.wValidBitsPerSample = 32;
-        format.SubFormat = KSDATAFORMAT_SUBTYPE_IEEE_FLOAT;
-        format.dwChannelMask = SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT;
-
-        // ponytail: AUTOCONVERTPCM lets Windows convert to the device format. If a capture application
-        // reads distorted audio, port ensure_recommended_steam_mic_format() from pull request #1428,
-        // which forces both endpoints to 2 channels, 32-bit, 48000 Hz.
-        auto status = audio_client->Initialize(
-          AUDCLNT_SHAREMODE_SHARED,
-          AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
-          BUFFER_DURATION_100NS,
-          0,
-          &format.Format,
-          nullptr
-        );
-        if (FAILED(status)) {
-          BOOST_LOG(error) << "Remote microphone: could not initialize the Steam Streaming Microphone: 0x"sv << util::hex(status).to_string_view();
-          error = virtual_mic_error_e::device_open_failed;
-          return false;
+        if (auto policy = create_policy()) {
+          normalise_endpoint_format(policy.get(), render_id);
+          normalise_endpoint_format(policy.get(), *found_capture);
         }
 
         render_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-        if (!render_event ||
-            FAILED(audio_client->GetBufferSize(&buffer_frames)) ||
-            FAILED(audio_client->GetService(IID_IAudioRenderClient, (void **) &render_client)) || !render_client ||
-            FAILED(audio_client->SetEventHandle(render_event)) ||
-            FAILED(audio_client->Start())) {
-          error = virtual_mic_error_e::device_open_failed;
+        if (!render_event || !open_client()) {
+          error_out = virtual_mic_error_e::device_open_failed;
           return false;
         }
 
         previous_default = default_capture_id(device_enum.get());
-        if (previous_default == *capture_id) {
+        if (previous_default == *found_capture) {
           // A stale switch is already in place. Keeping it as "previous" would make the restore a no-op forever.
           previous_default.clear();
         }
-        set_default_capture(*capture_id);
+        set_default_capture(*found_capture);
 
         render_thread = std::thread {[this]() {
           render_loop();
@@ -1966,16 +2171,8 @@ namespace platf {
         return true;
       }
 
-      bool write(const float *mono_samples, std::size_t count) override {
-        if (failed) {
-          return false;
-        }
-        std::lock_guard lock {queue_mutex};
-        queue.insert(queue.end(), mono_samples, mono_samples + count);
-        while (queue.size() > MAX_QUEUED_SAMPLES) {
-          queue.pop_front();
-        }
-        return true;
+      bool healthy() const override {
+        return !failed;
       }
 
       std::string previous_default_capture() const override {
@@ -1983,9 +2180,71 @@ namespace platf {
       }
 
     private:
+      /**
+       * @brief Activate, initialise, prime, and start the render client. Runs on init and on recovery.
+       */
+      bool open_client() {
+        device_t device;
+        if (FAILED(device_enum->GetDevice(render_id.c_str(), &device)) || !device ||
+            FAILED(device->Activate(IID_IAudioClient, CLSCTX_ALL, nullptr, (void **) &audio_client)) || !audio_client) {
+          return false;
+        }
+
+        auto format = make_format(true);
+        auto status = audio_client->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK, BUFFER_DURATION_100NS, 0, &format.Format, nullptr);
+        if (FAILED(status)) {
+          BOOST_LOG(error) << "Remote microphone: could not initialize the Steam Streaming Microphone: 0x"sv << util::hex(status).to_string_view();
+          return false;
+        }
+
+        if (FAILED(audio_client->GetBufferSize(&buffer_frames)) ||
+            FAILED(audio_client->GetService(IID_IAudioRenderClient, (void **) &render_client)) || !render_client ||
+            FAILED(audio_client->SetEventHandle(render_event))) {
+          return false;
+        }
+
+        // A cold buffer glitches at the start of the stream, so half of it is primed with silence.
+        BYTE *buffer = nullptr;
+        if (SUCCEEDED(render_client->GetBuffer(buffer_frames / 2, &buffer)) && buffer) {
+          render_client->ReleaseBuffer(buffer_frames / 2, AUDCLNT_BUFFERFLAGS_SILENT);
+        }
+
+        return SUCCEEDED(audio_client->Start());
+      }
+
+      void close_client() {
+        if (audio_client) {
+          audio_client->Stop();
+        }
+        render_client.reset();
+        audio_client.reset();
+      }
+
+      /**
+       * @brief Reopen the client after a recoverable error. Latches failed for every other error.
+       */
+      bool recover(HRESULT status) {
+        if (!is_recoverable(status)) {
+          failed = true;
+          return false;
+        }
+
+        BOOST_LOG(warning) << "Remote microphone: reopening the Steam Streaming Microphone after 0x"sv << util::hex(status).to_string_view();
+        close_client();
+        Sleep(500);
+        if (!open_client()) {
+          failed = true;
+          return false;
+        }
+        return true;
+      }
+
       void render_loop() {
         CoInitializeEx(nullptr, COINIT_MULTITHREADED | COINIT_SPEED_OVER_MEMORY);
         platf::adjust_thread_priority(platf::thread_priority_e::high);
+
+        std::vector<float> packet(VIRTUAL_MIC_MAX_PACKET_SAMPLES);
+        std::vector<float> pending;  // decoded samples that did not fit in the device yet
 
         while (!stop) {
           WaitForSingleObject(render_event, 20);
@@ -1994,61 +2253,76 @@ namespace platf {
           }
 
           UINT32 padding = 0;
-          if (FAILED(audio_client->GetCurrentPadding(&padding))) {
-            failed = true;
-            break;
+          auto status = audio_client->GetCurrentPadding(&padding);
+          if (FAILED(status)) {
+            if (!recover(status)) {
+              break;
+            }
+            pending.clear();  // stale audio must not replay into the reopened client
+            continue;
           }
 
-          UINT32 frames = buffer_frames - padding;
-          {
-            std::lock_guard lock {queue_mutex};
-            frames = std::min<UINT32>(frames, static_cast<UINT32>(queue.size()));
+          while (padding + pending.size() < TARGET_QUEUED_FRAMES) {
+            auto samples = fill(packet.data(), packet.size());
+            if (samples == 0) {
+              break;
+            }
+            for (std::size_t index = 0; index < samples; ++index) {
+              pending.push_back(std::clamp(packet[index], -1.0f, 1.0f));
+            }
           }
+
+          auto frames = std::min<UINT32>(buffer_frames - padding, static_cast<UINT32>(pending.size()));
           if (frames == 0) {
             continue;
           }
 
           BYTE *buffer = nullptr;
-          if (FAILED(render_client->GetBuffer(frames, &buffer)) || !buffer) {
-            failed = true;
-            break;
+          status = render_client->GetBuffer(frames, &buffer);
+          if (FAILED(status) || !buffer) {
+            if (!recover(status)) {
+              break;
+            }
+            pending.clear();
+            continue;
           }
 
           auto *out = reinterpret_cast<float *>(buffer);
-          {
-            std::lock_guard lock {queue_mutex};
-            for (UINT32 frame = 0; frame < frames; ++frame) {
-              auto sample = queue.front();
-              queue.pop_front();
-              out[frame * 2] = sample;
-              out[frame * 2 + 1] = sample;
-            }
+          for (UINT32 frame = 0; frame < frames; ++frame) {
+            out[frame * 2] = pending[frame];
+            out[frame * 2 + 1] = pending[frame];
           }
-          render_client->ReleaseBuffer(frames, 0);
+          pending.erase(pending.begin(), pending.begin() + frames);
+
+          status = render_client->ReleaseBuffer(frames, 0);
+          if (FAILED(status) && !recover(status)) {
+            break;
+          }
         }
 
         CoUninitialize();
       }
 
+      virtual_mic_fill_t fill;
+      device_enum_t device_enum;
       audio_client_t audio_client;
       render_client_t render_client;
       HANDLE render_event = nullptr;
       UINT32 buffer_frames = 0;
+      std::wstring render_id;
       std::wstring previous_default;
       bool com_initialized = false;
 
-      std::mutex queue_mutex;
-      std::deque<float> queue;
       std::thread render_thread;
       std::atomic<bool> stop {false};
       std::atomic<bool> failed {false};
     };
   }  // namespace
 
-  std::unique_ptr<virtual_mic_t> virtual_mic(virtual_mic_error_e &error) {
-    error = virtual_mic_error_e::none;
-    auto mic = std::make_unique<wasapi_virtual_mic_t>();
-    if (!mic->init(error)) {
+  std::unique_ptr<virtual_mic_t> virtual_mic(virtual_mic_fill_t fill, virtual_mic_error_e &error_out) {
+    error_out = virtual_mic_error_e::none;
+    auto mic = std::make_unique<wasapi_virtual_mic_t>(std::move(fill));
+    if (!mic->init(error_out)) {
       return nullptr;
     }
     return mic;
@@ -2092,14 +2366,6 @@ cmake -B cmake-build-mic -G Ninja -S . -DBUILD_TESTS=ON && ninja -C cmake-build-
 
 Expected: the build completes. `mic_write.cpp` compiles with no error. When `CLSID_MMDeviceEnumerator` or `KSDATAFORMAT_SUBTYPE_IEEE_FLOAT` is reported as undefined at link time, add `#define INITGUID` as the first line of `mic_write.cpp` and rebuild.
 
-Also confirm the driver file exists:
-
-```bash
-ls "/c/Program Files (x86)/Common Files/Steam/drivers/Windows10/x64/" | grep -i microphone
-```
-
-Expected: `SteamStreamingMicrophone.inf`. When the file has a different name, update `STEAM_MIC_DRIVER_PATH` to match.
-
 - [ ] **Step 7: Commit**
 
 ```bash
@@ -2139,7 +2405,17 @@ git commit -m "feat(mic): add virtual microphone interface and Windows WASAPI wr
   - `void update_tray_mic_disconnected(std::string device_name, std::string reason)`
   - `void update_tray_mic_error(std::string message)`
 
-Threading model: the mic thread runs one `io_context`. The mic session, the socket, the decoder, and the virtual microphone are touched only on that thread. Config server handlers reach them by posting a task and waiting on a future. One mutex guards the store, the pairing state, and the connected device id, which handlers read directly.
+Threading model, three threads:
+
+- **Mic thread.** Runs one `io_context`. It owns the socket, the mic session, and a 1 second housekeeping timer. It pushes audio frames into the jitter buffer.
+- **Render thread.** Owned by the virtual microphone from Task 5. It calls `fill_from_session()`, which pops one frame from the jitter buffer and decodes it. The decoder is touched only here. The audio device clock is therefore the only playout clock.
+- **Config server thread.** Handlers reach the mic session by posting a task to the mic thread and waiting on a future.
+
+Two mutexes exist. `session_t::jitter_mutex` guards the jitter buffer between the mic thread and the render thread. `state_mutex` guards the store, the pairing state, and the connected device id, which handlers read directly.
+
+`end_session()` destroys the virtual microphone before the decoder. That order joins the render thread first, so the decoder has no user when it is destroyed.
+
+Design evidence: `docs/superpowers/research/2026-09-20-voice-playout.md`. A 20 ms timer is unsuitable on Windows, where the default timer granularity is 15.625 ms and Apollo raises it only while a stream runs.
 
 - [ ] **Step 1: Add the tray functions**
 
@@ -2284,6 +2560,10 @@ Create `src/mic.cpp`:
  * @brief Definitions for the remote microphone module.
  *
  * This module never touches streaming code. Every failure ends the mic session only.
+ *
+ * Playout is pull-based: the virtual microphone's render thread calls fill_from_session()
+ * when the device has room, so the audio device clock is the only playout clock.
+ * Design evidence: docs/superpowers/research/2026-09-20-voice-playout.md.
  */
 // standard includes
 #include <array>
@@ -2318,8 +2598,8 @@ namespace mic {
     using steady = std::chrono::steady_clock;
 
     constexpr int MIC_PORT_OFFSET = 13;
-    constexpr int FRAME_SAMPLES = 960;  // 20 ms at 48 kHz
-    constexpr auto TICK = 20ms;
+    constexpr int FRAME_SAMPLES = 960;  // 20 ms at 48 kHz, the duration concealed for one lost frame
+    constexpr auto HOUSEKEEPING = 1s;
     constexpr auto SESSION_TIMEOUT = 5s;
     constexpr auto REPLACED_LIFETIME = 5s;
     constexpr int MAX_DECODE_FAILURES = 25;  // 500 ms of consecutive failures
@@ -2329,11 +2609,18 @@ namespace mic {
       crypto::cipher::gcm_t cipher;
       device_t device;
       steady::time_point last_valid;
+      std::atomic<protocol::error_e> error {protocol::error_e::none};
+
+      // Shared by the mic thread (push) and the render thread (pop).
+      std::mutex jitter_mutex;
       jitter_buffer_t jitter;
-      std::unique_ptr<platf::virtual_mic_t> vmic;
+
+      // Touched only by the render thread, through fill_from_session().
       OpusDecoder *decoder = nullptr;
-      protocol::error_e error = protocol::error_e::none;
+      bool waiting = true;
       int decode_failures = 0;
+
+      std::unique_ptr<platf::virtual_mic_t> vmic;
     };
 
     struct replaced_t {
@@ -2372,9 +2659,9 @@ namespace mic {
 #endif
     }
 
-    void notify_error(protocol::error_e error) {
+    void notify_error(protocol::error_e error_code) {
       std::string text;
-      switch (error) {
+      switch (error_code) {
         case protocol::error_e::device_missing:
           text = "Apollo cannot find the Steam Streaming Microphone. Install Steam on the PC, then tap Connect.";
           break;
@@ -2394,7 +2681,50 @@ namespace mic {
     }
 
     /**
-     * @brief End the mic session on the mic thread. Destroying the virtual microphone restores the default capture device.
+     * @brief Decode the next packet for the virtual microphone. Runs on the render thread.
+     * @return The number of samples written to out, or 0 when nothing is ready to play.
+     */
+    std::size_t fill_from_session(session_t &target, float *out, std::size_t capacity) {
+      jitter_buffer_t::pop_result_t next;
+      {
+        std::lock_guard lock {target.jitter_mutex};
+        next = target.jitter.pop();
+      }
+
+      if (next.kind == jitter_buffer_t::pop_e::wait) {
+        target.waiting = true;
+        return 0;
+      }
+      if (target.waiting) {
+        // The sender was muted or silent. Decoding against the state of the last talkspurt
+        // blends two unrelated signals, so the decoder starts clean.
+        opus_decoder_ctl(target.decoder, OPUS_RESET_STATE);
+        target.waiting = false;
+      }
+
+      int samples;
+      if (next.kind == jitter_buffer_t::pop_e::frame) {
+        // capacity covers a 120 ms packet. A 960-sample buffer rejects anything longer than 20 ms.
+        samples = opus_decode_float(target.decoder, next.payload.data(), static_cast<opus_int32>(next.payload.size()), out, static_cast<int>(capacity), 0);
+      } else {
+        // A null payload asks Opus to conceal one lost frame of FRAME_SAMPLES.
+        samples = opus_decode_float(target.decoder, nullptr, 0, out, FRAME_SAMPLES, 0);
+      }
+
+      if (samples < 0) {
+        if (++target.decode_failures == MAX_DECODE_FAILURES) {
+          target.error = protocol::error_e::decode_failed;
+          notify_error(protocol::error_e::decode_failed);
+        }
+        return 0;
+      }
+
+      target.decode_failures = 0;
+      return static_cast<std::size_t>(samples);
+    }
+
+    /**
+     * @brief End the mic session on the mic thread.
      */
     void end_session(const std::string &reason, bool notify) {
       if (!session) {
@@ -2402,6 +2732,8 @@ namespace mic {
       }
 
       auto name = session->device.name;
+      // Order matters. Destroying the virtual microphone joins the render thread, which is the
+      // only user of the decoder. It also restores the default capture device.
       session->vmic.reset();
       if (session->decoder) {
         opus_decoder_destroy(session->decoder);
@@ -2430,37 +2762,49 @@ namespace mic {
         end_session("replaced by "s + device.name, false);
       }
 
-      platf::virtual_mic_error_e vmic_error = platf::virtual_mic_error_e::none;
-      auto vmic = platf::virtual_mic(vmic_error);
-      if (vmic_error == platf::virtual_mic_error_e::unsupported) {
-        return session_error_e::unsupported;
-      }
-
       auto key_bytes = crypto::rand(16);
       crypto::aes_t key {key_bytes.begin(), key_bytes.end()};
       std::uint32_t id = 0;
       auto id_bytes = crypto::rand(4);
       std::memcpy(&id, id_bytes.data(), sizeof(id));
 
-      session = std::make_unique<session_t>();
-      session->id = id;
-      session->cipher = crypto::cipher::gcm_t {key, false};
-      session->device = device;
-      session->last_valid = steady::now();
-      session->vmic = std::move(vmic);
-
-      if (vmic_error == platf::virtual_mic_error_e::device_missing) {
-        session->error = protocol::error_e::device_missing;
-      } else if (vmic_error == platf::virtual_mic_error_e::device_open_failed) {
-        session->error = protocol::error_e::device_open_failed;
-      }
+      auto next = std::make_unique<session_t>();
+      next->id = id;
+      next->cipher = crypto::cipher::gcm_t {key, false};
+      next->device = device;
+      next->last_valid = steady::now();
 
       int opus_error = OPUS_OK;
-      session->decoder = opus_decoder_create(48000, 1, &opus_error);
+      next->decoder = opus_decoder_create(48000, 1, &opus_error);
       if (opus_error != OPUS_OK) {
-        session->decoder = nullptr;
-        session->error = protocol::error_e::decode_failed;
+        next->decoder = nullptr;
+        next->error = protocol::error_e::decode_failed;
       }
+
+      if (next->decoder) {
+        // The callback runs on the render thread until vmic is destroyed, and end_session()
+        // destroys vmic before the session, so the raw pointer stays valid.
+        auto *target = next.get();
+        platf::virtual_mic_error_e vmic_error = platf::virtual_mic_error_e::none;
+        next->vmic = platf::virtual_mic(
+          [target](float *out, std::size_t capacity) {
+            return fill_from_session(*target, out, capacity);
+          },
+          vmic_error
+        );
+
+        if (vmic_error == platf::virtual_mic_error_e::unsupported) {
+          opus_decoder_destroy(next->decoder);
+          return session_error_e::unsupported;
+        }
+        if (vmic_error == platf::virtual_mic_error_e::device_missing) {
+          next->error = protocol::error_e::device_missing;
+        } else if (vmic_error == platf::virtual_mic_error_e::device_open_failed) {
+          next->error = protocol::error_e::device_open_failed;
+        }
+      }
+
+      session = std::move(next);
 
       {
         std::lock_guard lock {state_mutex};
@@ -2481,8 +2825,8 @@ namespace mic {
       return session_info_t {id, key_bytes, net::map_port(MIC_PORT_OFFSET)};
     }
 
-    void send_pong(crypto::cipher::gcm_t &cipher, std::uint32_t session_id, std::uint32_t sequence, protocol::error_e error) {
-      const char code = static_cast<char>(error);
+    void send_pong(crypto::cipher::gcm_t &cipher, std::uint32_t session_id, std::uint32_t sequence, protocol::error_e error_code) {
+      const char code = static_cast<char>(error_code);
       auto datagram = protocol::encrypt_packet(cipher, protocol::direction_e::to_client, {protocol::packet_type_e::pong, session_id, sequence}, std::string_view {&code, 1});
       if (datagram.empty()) {
         return;
@@ -2506,6 +2850,7 @@ namespace mic {
 
         if (packet->header.type == protocol::packet_type_e::audio) {
           if (session->error == protocol::error_e::none) {
+            std::lock_guard lock {session->jitter_mutex};
             session->jitter.push(packet->header.sequence, std::move(packet->payload));
           }
         } else if (packet->header.type == protocol::packet_type_e::ping) {
@@ -2521,42 +2866,12 @@ namespace mic {
       }
     }
 
-    void play_one_frame() {
-      if (!session->vmic || !session->decoder) {
-        return;
-      }
-
-      auto next = session->jitter.pop();
-      if (next.kind == jitter_buffer_t::pop_e::wait) {
-        return;
-      }
-
-      std::array<float, FRAME_SAMPLES> pcm;
-      int samples;
-      if (next.kind == jitter_buffer_t::pop_e::frame) {
-        samples = opus_decode_float(session->decoder, next.payload.data(), static_cast<opus_int32>(next.payload.size()), pcm.data(), FRAME_SAMPLES, 0);
-      } else {
-        // A null payload asks Opus to conceal one lost frame.
-        samples = opus_decode_float(session->decoder, nullptr, 0, pcm.data(), FRAME_SAMPLES, 0);
-      }
-
-      if (samples < 0) {
-        if (++session->decode_failures == MAX_DECODE_FAILURES) {
-          session->error = protocol::error_e::decode_failed;
-          notify_error(session->error);
-        }
-        return;
-      }
-
-      session->decode_failures = 0;
-      if (!session->vmic->write(pcm.data(), static_cast<std::size_t>(samples))) {
-        session->error = protocol::error_e::device_open_failed;
-        notify_error(session->error);
-        session->vmic.reset();
-      }
-    }
-
-    void on_tick(const boost::system::error_code &ec) {
+    /**
+     * @brief Expire the replaced key, time out a silent session, and check the virtual microphone.
+     *
+     * One second is enough for these. Playout does not depend on this timer.
+     */
+    void on_housekeeping(const boost::system::error_code &ec) {
       if (ec) {
         return;
       }
@@ -2569,14 +2884,15 @@ namespace mic {
       if (session) {
         if (now - session->last_valid > SESSION_TIMEOUT) {
           end_session("connection lost", true);
-        } else {
-          play_one_frame();
+        } else if (session->vmic && !session->vmic->healthy()) {
+          session->error = protocol::error_e::device_open_failed;
+          notify_error(protocol::error_e::device_open_failed);
+          session->vmic.reset();
         }
       }
 
-      // Schedule from the previous expiry so the 20 ms period does not drift.
-      timer->expires_at(timer->expiry() + TICK);
-      timer->async_wait(on_tick);
+      timer->expires_after(HOUSEKEEPING);
+      timer->async_wait(on_housekeeping);
     }
 
     void receive_next() {
@@ -2606,8 +2922,8 @@ namespace mic {
         socket->bind(udp::endpoint(protocol_family, port));
 
         timer = std::make_unique<asio::steady_timer>(*io);
-        timer->expires_after(TICK);
-        timer->async_wait(on_tick);
+        timer->expires_after(HOUSEKEEPING);
+        timer->async_wait(on_housekeeping);
         receive_next();
 
         BOOST_LOG(info) << "Remote microphone: listening on UDP port "sv << port;
@@ -2832,7 +3148,7 @@ python3 tests/mic_standalone/syntax_check.py src/main.cpp
 ninja -C build/mic_standalone && ./build/mic_standalone/test_mic_standalone
 ```
 
-Expected: three exit codes of 0, then 36 tests PASS. When the syntax check reports that `<opus/opus.h>` is missing, run `brew install opus` and repeat.
+Expected: three exit codes of 0, then 37 tests PASS. When the syntax check reports that `<opus/opus.h>` is missing, run `brew install opus` and repeat.
 
 - [ ] **Step 7: Confirm the isolation rule**
 
@@ -3608,7 +3924,7 @@ cmake -B cmake-build-mic -G Ninja -S . -DBUILD_TESTS=ON && ninja -C cmake-build-
 ./cmake-build-mic/tests/test_sunshine --gtest_filter='Mic*'
 ```
 
-Expected: the build completes, and 36 tests PASS.
+Expected: the build completes, and 37 tests PASS.
 
 - [ ] **Step 4: Windows check: inert until paired**
 
@@ -3639,6 +3955,8 @@ The operator confirms each item:
 6. `GET /api/mic/list` with the read-only API key returns the device with `"connected": true`.
 7. A Moonlight stream started during the session is unaffected.
 8. After the script ends, the tray shows "Microphone disconnected: Reference sender", and the previous default input is restored.
+9. Restart Apollo. "Reference sender" is still listed under Microphones, and `mic_state.json` beside `sunshine_state.json` holds an empty `previous_default_capture`. This confirms that the store replaces its file correctly under the Windows toolchain.
+10. In Windows Sound settings, open the properties of both "Speakers (Steam Streaming Microphone)" and "Microphone (Steam Streaming Microphone)". Both show 2 channels, 32 bit, 48000 Hz.
 
 - [ ] **Step 6: Windows check: failure paths**
 
