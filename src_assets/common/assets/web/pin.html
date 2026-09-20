@@ -230,7 +230,7 @@
           <span class="me-2">{{ mic.name }}</span>
           <span v-if="mic.connected" class="badge bg-success me-auto">{{ $t('pin.mic_connected') }}</span>
           <span v-else class="me-auto"></span>
-          <div class="me-2 btn btn-danger" @click="removeMic(mic)"><i class="fas fa-trash"></i></div>
+          <button type="button" class="me-2 btn btn-danger" :aria-label="$t('pin.mic_remove', { name: mic.name })" @click="removeMic(mic)"><i class="fas fa-trash" aria-hidden="true"></i></button>
         </div>
       </ul>
       <ul v-else class="list-group list-group-flush list-group-item-light">
@@ -464,6 +464,10 @@
               this.micStatus = 'danger';
               this.micMessage = this.i18n.t('pin.mic_pair_failure');
             }
+          })
+          .catch(() => {
+            this.micStatus = 'danger';
+            this.micMessage = this.i18n.t('pin.mic_request_failed');
           });
       },
       removeMic(mic) {
@@ -473,7 +477,15 @@
           headers: { 'Content-Type': 'application/json' },
           method: 'POST',
           body: JSON.stringify({ uuid: mic.uuid })
-        }).then(() => this.refreshMics());
+        })
+          .then((response) => response.json())
+          .then((response) => {
+            if (response.status !== true) {
+              alert(this.i18n.t('pin.mic_request_failed'));
+            }
+            this.refreshMics();
+          })
+          .catch(() => alert(this.i18n.t('pin.mic_request_failed')));
       },
       refreshMics() {
         fetch("./api/mic/list", { credentials: 'include' })

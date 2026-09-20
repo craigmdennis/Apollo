@@ -567,7 +567,9 @@
     "mic_devices_desc": "Phones and Macs paired through Calliope. These are separate from the streaming devices above.",
     "mic_no_devices": "There are no paired microphones.",
     "mic_connected": "Connected",
-    "mic_remove_confirm": "Remove {name}? It will disconnect now and must be paired again to reconnect."
+    "mic_remove_confirm": "Remove {name}? It will disconnect now and must be paired again to reconnect.",
+    "mic_remove": "Remove {name}",
+    "mic_request_failed": "Apollo did not answer. Reload this page, sign in again, and repeat the action."
   },
   "resource_card": {
     "github_discussions": "GitHub Discussions",
