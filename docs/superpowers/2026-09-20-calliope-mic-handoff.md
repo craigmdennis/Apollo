@@ -16,7 +16,7 @@ Apollo gains a remote microphone receiver. A companion app named Calliope (iOS a
 | Whole-branch review | 0 Critical, 7 Important, 15 Minor. All Important findings fixed in `ab81fd5a`, and a scoped re-review confirmed each fix |
 | Tests on macOS | 46 tests from 5 suites pass in the standalone target. `src/mic.cpp` and `src/confighttp.cpp` pass a syntax-only compile |
 | Windows build | Not run. This is the next step |
-| Calliope app | Not started. No repository exists. The spec and the Apple research report hold the design |
+| Calliope app | Not started. The private repository `craigmdennis/Calliope` holds copies of the spec, the Apple research report, the reference sender, and the test vectors |
 
 ### Unverified until the Windows build
 
@@ -107,7 +107,7 @@ The full checklist is Task 9, Steps 3 to 6, in `docs/superpowers/plans/2026-09-2
 1. Run the Windows verification above, and fix what it finds.
 2. Read the "Product behaviour" section of the rulings file. Ruling 8, the default capture switch, is the one marked as an overrule candidate.
 3. After the checklist passes, merge `feature/calliope-mic` into `master` on `origin`.
-4. Write the Calliope plan as a separate plan, in a new repository beside Apollo. The plan starts from the spec and the Apple research report.
+4. Write the Calliope plan as a separate plan, in the `craigmdennis/Calliope` repository. The plan starts from the spec and the Apple research report. The Apollo copies of those files are the source, so a protocol change lands in Apollo first.
 5. Build Calliope with a free Apple ID first. The paid Apple Developer Program and TestFlight are an optional last milestone.
 
 ### Rules the Calliope client must follow
