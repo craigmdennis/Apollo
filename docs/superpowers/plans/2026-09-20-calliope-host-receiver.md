@@ -4610,8 +4610,12 @@ In `en.json`, inside the `"pin"` object, add these keys. Keep the object in its 
     "mic_devices_desc": "Phones and Macs paired through Calliope. These are separate from the streaming devices above.",
     "mic_no_devices": "There are no paired microphones.",
     "mic_connected": "Connected",
-    "mic_remove_confirm": "Remove {name}? It will disconnect now and must be paired again to reconnect."
+    "mic_remove_confirm": "Remove {name}? It will disconnect now and must be paired again to reconnect.",
+    "mic_remove": "Remove {name}",
+    "mic_request_failed": "Apollo did not answer. Reload this page, sign in again, and repeat the action."
 ```
+
+The remove control is a real `<button>` with an accessible name, so a keyboard reaches it. A failed request shows `mic_request_failed`, because every screen states what happened and what to do next.
 
 - [ ] **Step 2: Add the tab and the form**
 
@@ -4663,7 +4667,7 @@ After the closing `</div>` of the "Manage Clients" card and before `</div>` of `
           <span class="me-2">{{ mic.name }}</span>
           <span v-if="mic.connected" class="badge bg-success me-auto">{{ $t('pin.mic_connected') }}</span>
           <span v-else class="me-auto"></span>
-          <div class="me-2 btn btn-danger" @click="removeMic(mic)"><i class="fas fa-trash"></i></div>
+          <button type="button" class="me-2 btn btn-danger" :aria-label="$t('pin.mic_remove', { name: mic.name })" @click="removeMic(mic)"><i class="fas fa-trash" aria-hidden="true"></i></button>
         </div>
       </ul>
       <ul v-else class="list-group list-group-flush list-group-item-light">
@@ -4726,6 +4730,10 @@ In `methods`, after `switchTab`, add:
               this.micStatus = 'danger';
               this.micMessage = this.i18n.t('pin.mic_pair_failure');
             }
+          })
+          .catch(() => {
+            this.micStatus = 'danger';
+            this.micMessage = this.i18n.t('pin.mic_request_failed');
           });
       },
       removeMic(mic) {
@@ -4735,7 +4743,15 @@ In `methods`, after `switchTab`, add:
           headers: { 'Content-Type': 'application/json' },
           method: 'POST',
           body: JSON.stringify({ uuid: mic.uuid })
-        }).then(() => this.refreshMics());
+        })
+          .then((response) => response.json())
+          .then((response) => {
+            if (response.status !== true) {
+              alert(this.i18n.t('pin.mic_request_failed'));
+            }
+            this.refreshMics();
+          })
+          .catch(() => alert(this.i18n.t('pin.mic_request_failed')));
       },
       refreshMics() {
         fetch("./api/mic/list", { credentials: 'include' })
