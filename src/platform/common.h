@@ -561,6 +561,8 @@ namespace platf {
    * @return The number of samples written, or 0 when nothing is ready to play.
    *
    * Called only from the virtual microphone's render thread.
+   * The callback can run until the virtual microphone's destructor returns, so everything it
+   * captures must outlive that destructor.
    */
   using virtual_mic_fill_t = std::function<std::size_t(float *mono_out, std::size_t capacity)>;
 
@@ -569,6 +571,8 @@ namespace platf {
    *
    * On Windows this is the Steam Streaming Microphone. Creating one makes it the default
    * capture device. Destroying it stops the render thread and restores the previous default.
+   * Create and destroy the object on the same thread. That thread must not be a single-threaded
+   * COM apartment on Windows.
    */
   class virtual_mic_t {
   public:
@@ -595,6 +599,8 @@ namespace platf {
   /**
    * @brief Open the virtual microphone on the calling thread and start pulling audio from fill.
    * @param error_out Receives the reason when the result is null.
+   *
+   * Can block for several seconds when the driver is installed.
    */
   std::unique_ptr<virtual_mic_t> virtual_mic(virtual_mic_fill_t fill, virtual_mic_error_e &error_out);
 

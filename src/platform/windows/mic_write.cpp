@@ -7,6 +7,7 @@
  * Design evidence: docs/superpowers/research/2026-09-20-windows-virtual-mic.md and
  * docs/superpowers/research/2026-09-20-voice-playout.md.
  */
+#define INITGUID
 // standard includes
 #include <algorithm>
 #include <atomic>
@@ -17,7 +18,6 @@
 
 // platform includes
 #include <Audioclient.h>
-#include <ksmedia.h>
 #include <mmdeviceapi.h>
 #include <newdev.h>
 #include <synchapi.h>
@@ -149,6 +149,9 @@ namespace platf {
       if (!config::audio.install_steam_drivers) {
         return false;
       }
+      if (!*STEAM_MIC_DRIVER_PATH) {
+        return false;
+      }
 
       // MinGW's libnewdev.a is missing DiInstallDriverW(), so it is loaded at runtime.
       auto newdev = LoadLibraryExW(L"newdev.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
@@ -262,6 +265,9 @@ namespace platf {
       }
 
       ~wasapi_virtual_mic_t() override {
+        if (owner != std::thread::id {} && std::this_thread::get_id() != owner) {
+          BOOST_LOG(error) << "Remote microphone: the virtual microphone was destroyed on a different thread from the one that created it. The default capture device may not be restored."sv;
+        }
         stop = true;
         if (render_thread.joinable()) {
           render_thread.join();
@@ -280,13 +286,23 @@ namespace platf {
       }
 
       bool init(virtual_mic_error_e &error_out) {
-        com_initialized = SUCCEEDED(CoInitializeEx(nullptr, COINIT_MULTITHREADED | COINIT_SPEED_OVER_MEMORY));
+        owner = std::this_thread::get_id();
+
+        auto com_status = CoInitializeEx(nullptr, COINIT_MULTITHREADED | COINIT_SPEED_OVER_MEMORY);
+        if (com_status == RPC_E_CHANGED_MODE) {
+          BOOST_LOG(error) << "Remote microphone: the virtual microphone must be created on a thread that is not a single-threaded COM apartment"sv;
+          error_out = virtual_mic_error_e::device_open_failed;
+          return false;
+        }
+        com_initialized = SUCCEEDED(com_status);
 
         device_enum = create_enumerator();
         if (!device_enum) {
           error_out = virtual_mic_error_e::device_open_failed;
           return false;
         }
+
+        previous_default = default_capture_id(device_enum.get());
 
         auto found_render = find_steam_endpoint(device_enum.get(), eRender);
         if (!found_render && install_steam_mic_driver()) {
@@ -311,7 +327,6 @@ namespace platf {
           return false;
         }
 
-        previous_default = default_capture_id(device_enum.get());
         if (previous_default == *found_capture) {
           // A stale switch is already in place. Keeping it as "previous" would make the restore a no-op forever.
           previous_default.clear();
@@ -417,6 +432,7 @@ namespace platf {
 
           while (padding + pending.size() < TARGET_QUEUED_FRAMES) {
             auto samples = fill(packet.data(), packet.size());
+            samples = std::min(samples, packet.size());
             if (samples == 0) {
               break;
             }
@@ -432,11 +448,14 @@ namespace platf {
 
           BYTE *buffer = nullptr;
           status = render_client->GetBuffer(frames, &buffer);
-          if (FAILED(status) || !buffer) {
+          if (FAILED(status)) {
             if (!recover(status)) {
               break;
             }
             pending.clear();
+            continue;
+          }
+          if (!buffer) {
             continue;
           }
 
@@ -469,6 +488,7 @@ namespace platf {
       std::thread render_thread;
       std::atomic<bool> stop {false};
       std::atomic<bool> failed {false};
+      std::thread::id owner;
     };
   }  // namespace
 
