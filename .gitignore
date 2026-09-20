@@ -59,3 +59,7 @@ venv/
 
 # Portfolio blog working area (local only, never committed)
 blog/
+
+# Reference microphone sender state files
+tests/mic_standalone/.send_test_tone.json
+tests/mic_standalone/.send_test_tone.pem
