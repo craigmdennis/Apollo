@@ -411,6 +411,52 @@ namespace system_tray {
     tray_update(&tray);
   }
 
+  static void mic_notification(const char *title, const std::string &text, void (*callback)()) {
+    if (!tray_initialized) {
+      return;
+    }
+
+    tray.notification_title = NULL;
+    tray.notification_text = NULL;
+    tray.notification_cb = NULL;
+    tray.notification_icon = NULL;
+    tray.icon = TRAY_ICON;
+    tray_update(&tray);
+    char msg[256];
+    snprintf(msg, std::size(msg), "%s", text.c_str());
+  #ifdef _WIN32
+    strncpy(msg, utf8ToAcp(msg).c_str(), std::size(msg) - 1);
+  #endif
+    tray.notification_title = title;
+    tray.notification_text = msg;
+    tray.notification_icon = TRAY_ICON;
+    tray.notification_cb = callback;
+    tray.tooltip = PROJECT_NAME;
+    tray_update(&tray);
+  }
+
+  void update_tray_mic_pair_request() {
+    mic_notification("Incoming microphone pairing request", "Click here to enter the PIN from Calliope", []() {
+      launch_ui("/pin#MIC");
+    });
+  }
+
+  void update_tray_mic_connected(std::string device_name) {
+    mic_notification("Microphone connected", "Microphone connected: " + device_name, nullptr);
+  }
+
+  void update_tray_mic_disconnected(std::string device_name, std::string reason) {
+    auto text = "Microphone disconnected: " + device_name;
+    if (!reason.empty()) {
+      text += " (" + reason + ")";
+    }
+    mic_notification("Microphone disconnected", text, nullptr);
+  }
+
+  void update_tray_mic_error(std::string message) {
+    mic_notification("Microphone error", message, nullptr);
+  }
+
   // Threading functions available on all platforms
   static void tray_thread_worker() {
     BOOST_LOG(info) << "System tray thread started"sv;

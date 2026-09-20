@@ -93,6 +93,8 @@ set(SUNSHINE_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/mic_store.h"
         "${CMAKE_SOURCE_DIR}/src/mic_pairing.cpp"
         "${CMAKE_SOURCE_DIR}/src/mic_pairing.h"
+        "${CMAKE_SOURCE_DIR}/src/mic.cpp"
+        "${CMAKE_SOURCE_DIR}/src/mic.h"
         "${CMAKE_SOURCE_DIR}/src/rtsp.cpp"
         "${CMAKE_SOURCE_DIR}/src/rtsp.h"
         "${CMAKE_SOURCE_DIR}/src/stream.cpp"

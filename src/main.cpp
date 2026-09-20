@@ -16,6 +16,7 @@
 #include "httpcommon.h"
 #include "logging.h"
 #include "main.h"
+#include "mic.h"
 #include "nvhttp.h"
 #include "process.h"
 #include "system_tray.h"
@@ -427,6 +428,10 @@ int main(int argc, char *argv[]) {
     return lifetime::desired_exit_code;
   }
 
+  // Remote microphone. Inert until a mic device is paired. Started before the config
+  // server so that no mic endpoint runs against an unloaded store.
+  mic::start();
+
   std::thread httpThread {nvhttp::start};
   std::thread configThread {confighttp::start};
   std::thread rtspThread {rtsp_stream::start};
@@ -457,6 +462,8 @@ int main(int argc, char *argv[]) {
 
   // Wait for shutdown, this is not necessary when we're using the main event loop
   shutdown_event->view();
+
+  mic::stop();
 
   httpThread.join();
   configThread.join();

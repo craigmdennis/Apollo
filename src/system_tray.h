@@ -82,6 +82,21 @@ namespace system_tray {
   void update_tray_paired(std::string device_name);
 
   void update_tray_client_connected(std::string client_name);
+
+  /**
+   * @brief Spawns a notification for a remote microphone pairing request. Clicking it opens the Microphone tab.
+   */
+  void update_tray_mic_pair_request();
+
+  void update_tray_mic_connected(std::string device_name);
+
+  /**
+   * @param reason Empty, or a short reason such as "connection lost".
+   */
+  void update_tray_mic_disconnected(std::string device_name, std::string reason);
+
+  void update_tray_mic_error(std::string message);
+
   /**
    * @brief Initializes and runs the system tray in a separate thread.
    * @return 0 if initialization was successful, non-zero otherwise.
