@@ -4996,7 +4996,7 @@ cmake -B cmake-build-mic -G Ninja -S . -DBUILD_TESTS=ON && ninja -C cmake-build-
 ./cmake-build-mic/tests/test_sunshine --gtest_filter='Mic*'
 ```
 
-Expected: the build completes, and 45 tests PASS.
+Expected: the build completes, and 46 tests PASS. This build is the first to compile `src/platform/windows/mic_write.cpp`, because the test target links the mic module. A compile error in that file appears here, before any manual step.
 
 - [ ] **Step 4: Windows check: inert until paired**
 
@@ -5027,8 +5027,11 @@ The operator confirms each item:
 6. `GET /api/mic/list` with the read-only API key returns the device with `"connected": true`.
 7. A Moonlight stream started during the session is unaffected.
 8. After the script ends, the tray shows "Microphone disconnected: Reference sender", and the previous default input is restored.
-9. Restart Apollo. "Reference sender" is still listed under Microphones, and `mic_state.json` beside `sunshine_state.json` holds an empty `previous_default_capture`. This confirms that the store replaces its file correctly under the Windows toolchain.
-10. In Windows Sound settings, open the properties of both "Speakers (Steam Streaming Microphone)" and "Microphone (Steam Streaming Microphone)". Both show 2 channels, 32 bit, 48000 Hz.
+9. The first session on a PC with no Steam Streaming Microphone driver installs it. The session request takes several seconds, the Apollo web UI does not respond during that time, and the script can fail once with HTTP 503. Run the script again.
+10. Pair a second microphone: copy the script to a second folder and run it from there, so it has no saved token. Two devices named "Reference sender" are listed under Microphones. This confirms that the store replaces its file on the second save.
+11. While the second sender runs, start the first one. The first replaces the second, the tray shows "Microphone connected: Reference sender", and the replaced script prints `pong error code: 4`.
+12. Restart Apollo. "Reference sender" is still listed under Microphones, and `mic_state.json` beside `sunshine_state.json` holds an empty `previous_default_capture`. This confirms that the store replaces its file correctly under the Windows toolchain.
+13. In Windows Sound settings, open the properties of both "Speakers (Steam Streaming Microphone)" and "Microphone (Steam Streaming Microphone)". Both show 2 channels, 32 bit, 48000 Hz.
 
 - [ ] **Step 6: Windows check: failure paths**
 

@@ -137,9 +137,11 @@ Calliope calls use their own rule:
    and records the SHA-256 fingerprint of the host certificate.
 3. Calliope creates a random 4-digit PIN and a random 16-byte nonce. It computes
    `proof = HMAC-SHA256(key = PIN, message = fingerprint || nonce)`.
-4. Calliope sends `POST /api/mic/pair` with `name`, `nonce`, and `proof`. The
+4. Calliope sends `POST /api/mic/pair` with `name`, `nonce`, and `proof`. `name`
+   holds 1 to 64 bytes, and the host answers HTTP 400 for any other length. The
    host stores a pending request, raises the tray notice, and returns a random
-   128-bit `request_id`.
+   128-bit `request_id`. The host raises the tray notice at most once in 30
+   seconds, because any LAN host can call this route.
 5. Calliope displays the PIN and polls `POST /api/mic/pair/status` with the
    `request_id` every 2 seconds.
 6. The PIN and an optional device name are entered on the Microphone tab of the
@@ -158,6 +160,7 @@ a different certificate computes a different proof, and pairing fails.
 Limits on the unauthenticated endpoints:
 
 - One pending request per source address, and four pending requests in total.
+  The host answers HTTP 429 when four requests are pending.
 - A pending request expires after 120 seconds.
 - Three wrong PIN submissions cancel every pending request.
 - The existing request body size cap applies.
@@ -192,7 +195,13 @@ response never contains a token or a token hash.
 4. When a mic session already exists, the new mic session replaces it. The host
    sends pong code 4 to the replaced mic device.
 5. The mic session ends on `DELETE /api/mic/session`, or after 5 seconds with no
-   valid packet.
+   fresh packet.
+6. `POST /api/mic/session` takes up to 10 seconds when the host installs the
+   driver at the first mic session. When the mic thread does not answer within 10
+   seconds, the host answers HTTP 503, and Calliope sends the request again.
+   Calliope sets an HTTP timeout of at least 15 seconds for this request. The
+   config server has one thread, so the Apollo web UI does not respond during
+   that wait.
 
 ### UDP packets
 
@@ -216,7 +225,13 @@ response never contains a token or a token hash.
 - A ping payload is empty. A pong payload is 1 byte holding the error code, and
   the pong repeats the sequence of the ping.
 - While muted, Calliope sends no audio and one ping each second. While live,
-  Calliope also sends one ping each second.
+  Calliope also sends one ping each second. The audio sequence does not advance
+  while muted.
+- Sequences only increase for the life of a mic session. The host drops a ping
+  whose sequence is at or below the last accepted ping, because a captured ping
+  sent again must not keep a mic session alive. Only a fresh packet refreshes the
+  5 second timeout. Calliope keeps both counters across an audio interruption,
+  such as a phone call, and never restarts a counter inside a mic session.
 - After 3 seconds with no pong, Calliope requests a new mic session.
 - The host drops a duplicate packet and a packet older than the playout point.
   Opus loss concealment fills a lost frame.
@@ -435,8 +450,14 @@ Example names in this section are "GAMING-PC", "Living room iPhone", and
 - "Microphone connected: Living room iPhone"
 - "Microphone disconnected: Living room iPhone". A timeout appends
   "(connection lost)".
-- One toast for each of pong codes 1, 2, and 3, with the text from the error
-  table.
+- One toast for each of pong codes 1, 2, and 3. A toast is read at the PC, so its
+  wording differs from the Calliope text in the error table:
+  - Code 1: "Apollo cannot find the Steam Streaming Microphone. Install Steam on
+    this PC, then connect again from Calliope."
+  - Code 2: "Another program on this PC is blocking the Steam Streaming
+    Microphone. Close it, then connect again from Calliope."
+  - Code 3: "Apollo cannot decode the audio from the microphone device. Disconnect
+    and connect again in Calliope."
 
 ### Calliope
 
@@ -455,6 +476,9 @@ Example names in this section are "GAMING-PC", "Living room iPhone", and
 |---|---|---|
 | No host found | None | "Looking for Apollo on your network. Check that Apollo is running on your PC and that this device is on the same network." |
 | PIN expired, or three wrong PINs | Cancels the pending request | "This PIN is no longer valid. Tap Get a new PIN." |
+| Four pairing requests already pending | Answers HTTP 429 | "Apollo has too many pairing requests waiting. Wait two minutes, then tap Get a new PIN." |
+| The pairing answer never reaches Calliope | The mic device is stored, and the token was returned once | "Pairing did not finish. On the PC, remove this device under Microphones, then tap Get a new PIN." Calliope shows this when the PIN countdown ends with no answer. |
+| The host is still opening the virtual microphone | Answers HTTP 503 | "Connecting". Calliope sends the session request again, up to three times. |
 | Mic device removed in the web UI | Rejects the token with HTTP 401 | "This device was removed from Apollo on GAMING-PC. Pair again to use it." |
 | Host is Linux or macOS | Returns HTTP 501 | "Apollo on GAMING-PC cannot receive a microphone. This needs Apollo on Windows." |
 | Virtual microphone missing | Pong code 1 and a toast | "Apollo cannot find the Steam Streaming Microphone. Install Steam on the PC, then tap Connect." |
