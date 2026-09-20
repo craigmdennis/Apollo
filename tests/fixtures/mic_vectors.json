@@ -1,0 +1,39 @@
+{
+  "key": "000102030405060708090a0b0c0d0e0f",
+  "session_id": 16909060,
+  "packets": [
+    {
+      "name": "audio",
+      "type": 0,
+      "direction": 0,
+      "sequence": 7,
+      "payload": "6f7075732d6672616d652d6279746573",
+      "nonce": "000000000102030400000007",
+      "datagram": "000102030400000007e3f3ed704230288352a29d4e3c89e491d6321feab5073430ab02084b184f4096"
+    },
+    {
+      "name": "ping",
+      "type": 1,
+      "direction": 0,
+      "sequence": 8,
+      "payload": "",
+      "nonce": "000100000102030400000008",
+      "datagram": "0101020304000000080fbf941399f5707ebb96329105f94aed"
+    },
+    {
+      "name": "pong",
+      "type": 2,
+      "direction": 1,
+      "sequence": 8,
+      "payload": "01",
+      "nonce": "010200000102030400000008",
+      "datagram": "020102030400000008596ddb60fbaec3440d09f63c28cc910cce"
+    }
+  ],
+  "pin_proof": {
+    "pin": "4821",
+    "fingerprint": "69be57455b3b4f84c7c23140e875002791c5a5509ca9d0c644a63d5eaf836cce",
+    "nonce": "101112131415161718191a1b1c1d1e1f",
+    "proof": "a0aa0bf1c951d16d05f3ba31e554f10be50d504a4e2f786cb10bae190ebd1448"
+  }
+}
