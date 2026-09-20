@@ -200,13 +200,18 @@ response never contains a token or a token hash.
 |---|---|---|
 | Type | 1 byte | 0 audio, 1 ping, 2 pong |
 | Session id | 4 bytes | Big-endian, from the session reply |
-| Sequence | 4 bytes | Big-endian, starts at 0, never reused in a mic session |
-| Payload | Variable | AES-128-GCM ciphertext |
+| Sequence | 4 bytes | Big-endian, starts at 0. Each packet type has its own counter |
 | Tag | 16 bytes | GCM tag |
+| Payload | Variable | AES-128-GCM ciphertext |
 
+- The tag precedes the payload. This matches the `[tag][ciphertext]` layout that
+  `crypto::cipher::gcm_t` reads and writes.
 - The GCM nonce is 12 bytes: 1 direction byte (0 for Calliope to host, 1 for host
-  to Calliope), 3 zero bytes, the session id, and the sequence. A changed header
-  produces a different nonce, and the tag check fails.
+  to Calliope), the type byte, 2 zero bytes, the session id, and the sequence. A
+  changed header produces a different nonce, and the tag check fails.
+- The type byte in the nonce lets each packet type keep its own sequence counter.
+  Audio sequences are therefore contiguous, and a ping never appears as a lost
+  audio frame.
 - An audio payload is one Opus frame: 48 kHz, mono, 20 ms, about 32 kbps.
 - A ping payload is empty. A pong payload is 1 byte holding the error code, and
   the pong repeats the sequence of the ping.
