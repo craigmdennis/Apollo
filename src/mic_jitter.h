@@ -13,9 +13,9 @@ namespace mic {
   class jitter_buffer_t {
   public:
     enum class pop_e {
-      wait,  ///< Nothing to play: prebuffering, or the buffer is empty
+      wait,  ///< Nothing to play: prebuffering, or the talkspurt ended
       frame,  ///< payload holds the next Opus frame
-      lost  ///< The next sequence is missing. Run loss concealment.
+      lost  ///< The next sequence is missing or the buffer ran dry. Run loss concealment.
     };
 
     struct pop_result_t {
@@ -24,7 +24,8 @@ namespace mic {
     };
 
     static constexpr std::size_t PREBUFFER_FRAMES = 2;  // 40 ms
-    static constexpr std::size_t MAX_FRAMES = 10;  // 200 ms
+    static constexpr std::size_t MAX_FRAMES = 5;  // 100 ms
+    static constexpr int MAX_EMPTY_CONCEAL = 5;  // Opus concealment is silent by the fifth frame
 
     /**
      * @brief Queue one frame.
@@ -45,5 +46,6 @@ namespace mic {
     std::map<std::uint32_t, std::vector<std::uint8_t>> frames;
     bool started = false;
     std::uint32_t next_sequence = 0;
+    int empty_pops = 0;
   };
 }  // namespace mic

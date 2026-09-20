@@ -29,9 +29,16 @@ namespace mic {
     }
 
     if (frames.empty()) {
-      started = false;
-      return {pop_e::wait, {}};
+      // A momentary underrun is concealed. Restarting the prebuffer for it would add a 40 ms stall.
+      if (++empty_pops > MAX_EMPTY_CONCEAL) {
+        started = false;
+        empty_pops = 0;
+        return {pop_e::wait, {}};
+      }
+      ++next_sequence;
+      return {pop_e::lost, {}};
     }
+    empty_pops = 0;
 
     auto first = frames.begin()->first;
     if (first > next_sequence && (first - next_sequence > MAX_FRAMES || frames.size() == MAX_FRAMES)) {

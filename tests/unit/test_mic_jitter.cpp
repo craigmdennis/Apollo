@@ -75,7 +75,7 @@ TEST(MicJitter, RejectsLateFrame) {
 
 TEST(MicJitter, DropsOldestAboveMaximum) {
   jitter_buffer_t buffer;
-  for (std::uint32_t sequence = 0; sequence < 12; ++sequence) {
+  for (std::uint32_t sequence = 0; sequence < 7; ++sequence) {
     buffer.push(sequence, frame(static_cast<std::uint8_t>(sequence)));
   }
   EXPECT_EQ(buffer.size(), jitter_buffer_t::MAX_FRAMES);
@@ -84,12 +84,15 @@ TEST(MicJitter, DropsOldestAboveMaximum) {
   EXPECT_EQ(first.payload, frame(2));
 }
 
-TEST(MicJitter, EmptyBufferRestartsPrebuffer) {
+TEST(MicJitter, EmptyBufferConcealsThenRestartsPrebuffer) {
   jitter_buffer_t buffer;
   buffer.push(0, frame(0));
   buffer.push(1, frame(1));
   buffer.pop();
   buffer.pop();
+  for (int call = 0; call < jitter_buffer_t::MAX_EMPTY_CONCEAL; ++call) {
+    EXPECT_EQ(buffer.pop().kind, pop_e::lost) << "call " << call;
+  }
   EXPECT_EQ(buffer.pop().kind, pop_e::wait);
   buffer.push(40, frame(4));
   EXPECT_EQ(buffer.pop().kind, pop_e::wait);
@@ -97,6 +100,20 @@ TEST(MicJitter, EmptyBufferRestartsPrebuffer) {
   auto next = buffer.pop();
   ASSERT_EQ(next.kind, pop_e::frame);
   EXPECT_EQ(next.payload, frame(4));
+}
+
+TEST(MicJitter, ResumesWithoutPrebufferAfterAShortGap) {
+  jitter_buffer_t buffer;
+  buffer.push(0, frame(0));
+  buffer.push(1, frame(1));
+  buffer.pop();
+  buffer.pop();
+  EXPECT_EQ(buffer.pop().kind, pop_e::lost);  // sequence 2 concealed
+  EXPECT_FALSE(buffer.push(2, frame(2)));  // arrives after its concealment: late
+  EXPECT_TRUE(buffer.push(3, frame(3)));
+  auto next = buffer.pop();
+  ASSERT_EQ(next.kind, pop_e::frame);
+  EXPECT_EQ(next.payload, frame(3));
 }
 
 TEST(MicJitter, SkipsALargeGap) {
