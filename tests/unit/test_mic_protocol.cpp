@@ -145,3 +145,9 @@ TEST(MicProtocol, CertFingerprintIsStableAndDistinct) {
 TEST(MicProtocol, CertFingerprintRejectsGarbage) {
   EXPECT_FALSE(cert_fingerprint("not a certificate").has_value());
 }
+
+TEST(MicProtocol, PongPayloadIsCodeThenFiveBigEndianCounters) {
+  auto payload = pong_payload(error_e::decode_failed, {2480, 3, 12, 0, 2468});
+  ASSERT_EQ(payload.size(), PONG_PAYLOAD_SIZE);
+  EXPECT_EQ(to_hex(payload), "03" "000009b0" "00000003" "0000000c" "00000000" "000009a4");
+}

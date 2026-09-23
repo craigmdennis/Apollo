@@ -17,7 +17,7 @@ namespace mic::protocol {
   enum class packet_type_e : std::uint8_t {
     audio = 0,  ///< One Opus frame
     ping = 1,  ///< Keepalive from Calliope
-    pong = 2  ///< Reply from the host, carries one error_e byte
+    pong = 2  ///< Reply from the host, carries one error_e byte and five counters
   };
 
   enum class direction_e : std::uint8_t {
@@ -33,6 +33,18 @@ namespace mic::protocol {
     replaced = 4
   };
 
+  /**
+   * @brief Counters carried in every pong after the error code, each since the session began.
+   */
+  struct pong_counters_t {
+    std::uint32_t accepted;
+    std::uint32_t rejected;
+    std::uint32_t concealed;
+    std::uint32_t decode_failures;
+    std::uint32_t frames_out;
+  };
+
+  constexpr std::size_t PONG_PAYLOAD_SIZE = 21;
   constexpr std::size_t HEADER_SIZE = 9;
   constexpr std::size_t TAG_SIZE = crypto::cipher::tag_size;
   constexpr std::size_t MAX_PAYLOAD = 1400;
@@ -67,6 +79,11 @@ namespace mic::protocol {
    * @brief Encrypt a payload. Returns an empty vector when encryption fails.
    */
   std::vector<std::uint8_t> encrypt_packet(crypto::cipher::gcm_t &cipher, direction_e direction, const header_t &header, std::string_view payload);
+
+  /**
+   * @brief Build the pong payload: the error code, then the five counters as big-endian uint32.
+   */
+  std::string pong_payload(error_e code, const pong_counters_t &counters);
 
   /**
    * @brief HMAC-SHA256 with the PIN as key over fingerprint || nonce.

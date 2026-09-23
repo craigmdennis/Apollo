@@ -262,9 +262,13 @@ namespace mic {
       return session_info_t {id, key_bytes, net::map_port(MIC_PORT_OFFSET)};
     }
 
-    void send_pong(crypto::cipher::gcm_t &cipher, std::uint32_t session_id, std::uint32_t sequence, protocol::error_e error_code) {
-      const char code = static_cast<char>(error_code);
-      auto datagram = protocol::encrypt_packet(cipher, protocol::direction_e::to_client, {protocol::packet_type_e::pong, session_id, sequence}, std::string_view {&code, 1});
+    static protocol::pong_counters_t to_pong(const playout_t::counters_t &c) {
+      return {c.accepted, c.rejected, c.concealed, c.decode_failures, c.frames_out};
+    }
+
+    void send_pong(crypto::cipher::gcm_t &cipher, std::uint32_t session_id, std::uint32_t sequence, protocol::error_e error_code, const protocol::pong_counters_t &counters) {
+      auto payload = protocol::pong_payload(error_code, counters);
+      auto datagram = protocol::encrypt_packet(cipher, protocol::direction_e::to_client, {protocol::packet_type_e::pong, session_id, sequence}, payload);
       if (datagram.empty()) {
         return;
       }
@@ -296,14 +300,14 @@ namespace mic {
           session->have_ping = true;
           session->last_ping = packet->header.sequence;
           session->last_valid = steady::now();
-          send_pong(session->cipher, session->id, packet->header.sequence, session->error_code);
+          send_pong(session->cipher, session->id, packet->header.sequence, session->error_code, to_pong(session->playout.counters()));
         }
         return;
       }
 
       if (replaced && header->session_id == replaced->id && header->type == protocol::packet_type_e::ping) {
         if (protocol::decrypt_packet(replaced->cipher, protocol::direction_e::to_host, datagram)) {
-          send_pong(replaced->cipher, replaced->id, header->sequence, protocol::error_e::replaced);
+          send_pong(replaced->cipher, replaced->id, header->sequence, protocol::error_e::replaced, {});
         }
       }
     }

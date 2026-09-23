@@ -112,4 +112,16 @@ namespace mic::protocol {
     }
     return fingerprint;
   }
+
+  std::string pong_payload(error_e code, const pong_counters_t &counters) {
+    std::string payload;
+    payload.reserve(PONG_PAYLOAD_SIZE);
+    payload.push_back(static_cast<char>(code));
+    for (auto value : {counters.accepted, counters.rejected, counters.concealed, counters.decode_failures, counters.frames_out}) {
+      for (int shift = 24; shift >= 0; shift -= 8) {
+        payload.push_back(static_cast<char>((value >> shift) & 0xFF));
+      }
+    }
+    return payload;
+  }
 }  // namespace mic::protocol
