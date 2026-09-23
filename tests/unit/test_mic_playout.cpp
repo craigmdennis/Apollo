@@ -101,3 +101,27 @@ TEST(MicPlayout, AGoodFrameClearsTheFailureCount) {
   }
   EXPECT_FALSE(playout.decode_failed());
 }
+
+TEST(MicPlayout, CountsWhatItReceivesAndPlays) {
+  playout_t playout;
+  EXPECT_TRUE(playout.push(0, silence()));
+  EXPECT_TRUE(playout.push(2, silence()));
+  EXPECT_FALSE(playout.push(0, silence()));  // duplicate
+  EXPECT_EQ(playout.fill(buffer.data(), buffer.size()), 960u);  // sequence 0
+  EXPECT_EQ(playout.fill(buffer.data(), buffer.size()), 960u);  // sequence 1, concealed
+  EXPECT_EQ(playout.fill(buffer.data(), buffer.size()), 960u);  // sequence 2
+  auto counters = playout.counters();
+  EXPECT_EQ(counters.accepted, 2u);
+  EXPECT_EQ(counters.rejected, 1u);
+  EXPECT_EQ(counters.concealed, 1u);
+  EXPECT_EQ(counters.decode_failures, 0u);
+  EXPECT_EQ(counters.frames_out, 3u);
+}
+
+TEST(MicPlayout, CountsADecodeFailure) {
+  playout_t playout;
+  playout.push(0, invalid());
+  playout.push(1, silence());
+  playout.fill(buffer.data(), buffer.size());
+  EXPECT_EQ(playout.counters().decode_failures, 1u);
+}

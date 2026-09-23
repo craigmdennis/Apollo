@@ -61,6 +61,21 @@ namespace mic {
       return failed;
     }
 
+    struct counters_t {
+      std::uint32_t accepted;  ///< Frames the jitter buffer accepted
+      std::uint32_t rejected;  ///< Frames rejected as late or duplicate
+      std::uint32_t concealed;  ///< Frames Opus concealed for loss
+      std::uint32_t decode_failures;
+      std::uint32_t frames_out;  ///< Frames handed to the virtual microphone
+    };
+
+    /**
+     * @return The counters since construction. Safe from any thread.
+     */
+    counters_t counters() const {
+      return {accepted.load(), rejected.load(), concealed.load(), failures_total.load(), frames_out.load()};
+    }
+
   private:
     std::mutex jitter_mutex;
     jitter_buffer_t jitter;
@@ -71,5 +86,12 @@ namespace mic {
     int decode_failures = 0;
 
     std::atomic<bool> failed {false};
+
+    // Counters for the pong. Each is written by one thread and read by the network thread.
+    std::atomic<std::uint32_t> accepted {0};
+    std::atomic<std::uint32_t> rejected {0};
+    std::atomic<std::uint32_t> concealed {0};
+    std::atomic<std::uint32_t> failures_total {0};
+    std::atomic<std::uint32_t> frames_out {0};
   };
 }  // namespace mic

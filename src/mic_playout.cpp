@@ -24,8 +24,13 @@ namespace mic {
   }
 
   bool playout_t::push(std::uint32_t sequence, std::vector<std::uint8_t> payload) {
-    std::lock_guard lock {jitter_mutex};
-    return jitter.push(sequence, std::move(payload));
+    bool pushed;
+    {
+      std::lock_guard lock {jitter_mutex};
+      pushed = jitter.push(sequence, std::move(payload));
+    }
+    (pushed ? accepted : rejected).fetch_add(1, std::memory_order_relaxed);
+    return pushed;
   }
 
   std::size_t playout_t::fill(float *out, std::size_t capacity) {
@@ -55,10 +60,12 @@ namespace mic {
       samples = opus_decode_float(decoder, next.payload.data(), static_cast<opus_int32>(next.payload.size()), out, static_cast<int>(capacity), 0);
     } else {
       // A null payload asks Opus to conceal one lost frame of FRAME_SAMPLES.
+      concealed.fetch_add(1, std::memory_order_relaxed);
       samples = opus_decode_float(decoder, nullptr, 0, out, FRAME_SAMPLES, 0);
     }
 
     if (samples < 0) {
+      failures_total.fetch_add(1, std::memory_order_relaxed);
       if (++decode_failures >= MAX_DECODE_FAILURES) {
         failed = true;
       }
@@ -66,6 +73,7 @@ namespace mic {
     }
 
     decode_failures = 0;
+    frames_out.fetch_add(1, std::memory_order_relaxed);
     return static_cast<std::size_t>(samples);
   }
 }  // namespace mic
