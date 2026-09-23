@@ -18,6 +18,7 @@ Apollo gains a remote microphone receiver. A companion app named Calliope (iOS a
 | Windows build | Passes, 2026-09-20. `src/platform/windows/mic_write.cpp` compiled first time with no errors and no warnings. The stream-path diff against `master` is empty |
 | Tests on Windows | 46 tests from 5 suites pass, the same count as macOS |
 | Windows verification | Task 9 Steps 3 and 4 pass. Step 5: 9 of 13 items pass, 2 are degenerate on this PC, 1 is pending, 1 is not reproducible. Step 6: 1 of 4 passes, 1 is unreachable, 2 are pending. The detail is below |
+| Diagnostics | Every pong carries five playout counters after the error code, per `docs/superpowers/specs/2026-09-23-mic-diagnostics-design.md`. 49 tests pass in the standalone target and `src/mic.cpp` passes the syntax check. The Windows build and a live check against Calliope are pending |
 | Calliope app | Not started. The private repository `craigmdennis/Calliope` holds copies of the spec, the Apple research report, the reference sender, and the test vectors |
 
 ### What the Windows verification established

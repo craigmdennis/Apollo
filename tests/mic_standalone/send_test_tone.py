@@ -126,7 +126,11 @@ while time.time() - start < 20:
             data, _ = sock.recvfrom(64)
             nonce = bytes([1, 2, 0, 0]) + data[1:9]
             code = AESGCM(key).decrypt(nonce, data[25:] + data[9:25], None)
-            print("pong error code:", code[0])
+            if len(code) >= 21:
+                accepted, rejected, concealed, failures, played = struct.unpack(">IIIII", code[1:21])
+                print(f"pong error code: {code[0]}  accepted {accepted} rejected {rejected} concealed {concealed} decode failures {failures} played {played}")
+            else:
+                print("pong error code:", code[0])
         except socket.timeout:
             print("no pong")
     time.sleep(0.02)

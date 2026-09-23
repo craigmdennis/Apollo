@@ -222,8 +222,11 @@ response never contains a token or a token hash.
   Audio sequences are therefore contiguous, and a ping never appears as a lost
   audio frame.
 - An audio payload is one Opus frame: 48 kHz, mono, 20 ms, about 32 kbps.
-- A ping payload is empty. A pong payload is 1 byte holding the error code, and
-  the pong repeats the sequence of the ping.
+- A ping payload is empty. A pong payload is 21 bytes: the error code, then five
+  big-endian uint32 counters since the session began: frames accepted, frames
+  rejected as late or duplicate, frames concealed, decode failures, and frames
+  played. A client reads byte 0 alone from a shorter payload. The pong repeats
+  the sequence of the ping.
 - While muted, Calliope sends no audio and one ping each second. While live,
   Calliope also sends one ping each second. The audio sequence does not advance
   while muted.

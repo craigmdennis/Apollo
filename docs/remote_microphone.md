@@ -59,3 +59,4 @@ API key can read it. See [API](api.md).
 | This host cannot receive a microphone | The PC runs Apollo on Linux or macOS. The microphone needs Apollo on Windows |
 | Apollo is still opening the microphone | The first connection installs the Steam driver, which takes several seconds. Connect again. The Apollo web UI does not respond during that time |
 | The PC lists the device, and Calliope still waits for the PIN | The pairing answer did not reach Calliope. Remove the device under Microphones, then pair again |
+| Calliope shows Mic live and the PC hears nothing | Choose Copy diagnostics in Calliope. The Host counters line states whether the PC received and played the audio. A game started before the connection may need a restart to pick the Steam Streaming Microphone |
