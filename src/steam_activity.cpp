@@ -356,15 +356,35 @@ namespace steam_activity {
     return {};
   }
 
-  std::string_view wallpaper_type(const fs::path &file) {
-    std::error_code ec;
-    if (!fs::is_regular_file(file, ec) || fs::file_size(file, ec) > max_wallpaper_bytes) {
-      return {};
+  namespace {
+    std::optional<std::string> read_limited(const fs::path &file, uintmax_t max_bytes) {
+      std::error_code ec;
+      if (!fs::is_regular_file(file, ec) || fs::file_size(file, ec) > max_bytes || ec) {
+        return std::nullopt;
+      }
+      return read_text(file);
     }
-    std::ifstream in(file, std::ios::binary);
-    char head[4] {};
-    in.read(head, sizeof(head));
-    return sniff_image_type(std::string_view(head, static_cast<size_t>(in.gcount())));
+  }  // namespace
+
+  std::optional<image_t> load_art(const fs::path &file) {
+    auto type = media_type_for_extension(file);
+    auto data = type.empty() ? std::nullopt : read_limited(file, max_art_bytes);
+    if (!data) {
+      return std::nullopt;
+    }
+    return image_t {std::string(type), std::move(*data)};
+  }
+
+  std::optional<image_t> load_wallpaper(const fs::path &file) {
+    auto data = read_limited(file, max_wallpaper_bytes);
+    if (!data) {
+      return std::nullopt;
+    }
+    auto type = sniff_image_type(*data);
+    if (type.empty()) {
+      return std::nullopt;
+    }
+    return image_t {std::string(type), std::move(*data)};
   }
 
   std::optional<fs::path> pick_wallpaper(const fs::path &registry_path, const fs::path &transcoded) {
@@ -380,8 +400,10 @@ namespace steam_activity {
 
   std::optional<fs::path> find_art(const fs::path &root, uint32_t app_id, art_kind kind) {
     std::error_code ec;
-    auto cache = fs::weakly_canonical(root / "appcache" / "librarycache", ec);
-    if (ec || !fs::is_directory(cache, ec)) {
+    auto cache = fs::canonical(root / "appcache" / "librarycache", ec);
+    auto expected = fs::canonical(root, ec) / "appcache" / "librarycache";
+    // A link at appcache or librarycache makes the resolved path differ from the literal one.
+    if (ec || !iequals(cache.generic_string(), expected.generic_string()) || !fs::is_directory(cache, ec)) {
       return std::nullopt;
     }
 

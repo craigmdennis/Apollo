@@ -133,7 +133,20 @@ runs inside that pattern:
 
 Per-user reads are the Steam account and running game, and the wallpaper. When no one
 is signed in, the Steam account falls back to `loginusers.vdf`, the running game is
-`null`, and the wallpaper endpoint returns 404.
+`null`, and the art and wallpaper endpoints return 404.
+
+**Trust boundary.** SYSTEM can read files the signed-in user cannot, and the user
+controls the wallpaper path, the contents of Steam's folders, and anything in their
+own hive. Two rules keep the user from using Apollo to read such files:
+
+1. Every read of an image whose path derives from user-controlled data (art and
+   wallpaper) runs while impersonating the console user, so the user's own access
+   rights apply. The bytes are read inside the impersonation and then served.
+2. The Steam root comes only from the machine-wide key, which administrators write.
+   The user-hive `SteamPath` value is not used.
+
+The art lookup also rejects any link at `appcache` or `librarycache` (a symbolic link
+or a junction), because the resolved path must equal the literal path below the root.
 
 ### Sharing permission
 
@@ -182,7 +195,7 @@ whether Steam is installed. The client shows the "No Steam library" wording only
 |---|---|---|
 | `version` | integer | `1`. Increases when a field changes meaning. |
 | `steamInstalled` | boolean | `true` in the full object. |
-| `account` | string | Steam ID of the signed-in account. Never displayed. |
+| `account` | string or null | Steam ID of the signed-in account, `null` when unknown. Never displayed. |
 | `runningAppId` | integer or null | `null` when nothing runs or the value is unavailable. |
 | `runningName` | string or null | Name of the running game, from its manifest. `null` whenever `runningAppId` is `null`. |
 | `lastPlayed` | object or null | `{appId, name, at}`. `null` when no qualifying game exists. |
@@ -198,7 +211,7 @@ Steam client on both hosts before implementation (see the verification checklist
 
 | Data | Source |
 |---|---|
-| Steam root | Registry `HKLM\SOFTWARE\WOW6432Node\Valve\Steam`, value `InstallPath`. Second choice: user hive, `Software\Valve\Steam`, value `SteamPath`. |
+| Steam root | Registry `HKLM\SOFTWARE\WOW6432Node\Valve\Steam`, value `InstallPath`. The user-hive `SteamPath` is not used. |
 | Account ID | User hive, `Software\Valve\Steam\ActiveProcess`, value `ActiveUser`. The value is 0 when Steam is not signed in. |
 | Account when none is signed in | `<root>\config\loginusers.vdf`, the entry whose `MostRecent` is `1`. Its key is the Steam ID, so the account ID is the Steam ID minus `76561197960265728`. |
 | Running game | User hive, `Software\Valve\Steam`, value `RunningAppID`. 0 maps to `null`. |
@@ -254,7 +267,10 @@ found", so the endpoint answers `steamInstalled: false`.
      `library_600x900.jpg`. The hash folder name is not known in advance, so list the
      subfolders of `librarycache\<appId>` and take the first match.
 - `capsule` falls back to `header.jpg` in the same locations.
-- The resolved canonical path must lie inside `librarycache`. Reject anything else.
+- The resolved canonical path must lie inside `librarycache`, and `appcache` and
+  `librarycache` must not be links. Reject anything else.
+- The file is read while impersonating the console user (see the trust boundary). With
+  no user signed in, the endpoint returns 404.
 - Reject files over 8 MiB.
 - Set `Content-Type` from the extension (`jpg`, `png`, `webp`) and
   `Cache-Control: max-age=3600`.
@@ -269,7 +285,8 @@ serves a host that has no Steam library, where the wallpaper fills the backdrop.
   so it is treated as activity data. This is the author's choice, to be confirmed.
 - The path is read in user context from the user hive: `Control Panel\Desktop`, value
   `WallPaper`. If the value is empty or the file is missing, use
-  `%AppData%\Microsoft\Windows\Themes\TranscodedWallpaper` for the same user.
+  `%AppData%\Microsoft\Windows\Themes\TranscodedWallpaper` for the same user. The
+  file is opened and read while impersonating that user (see the trust boundary).
 - `TranscodedWallpaper` has no extension. Set `Content-Type` from the first bytes of
   the file: JPEG (`FF D8`), PNG (`89 50 4E 47`), or BMP (`42 4D`). Any other content
   returns 404.
@@ -279,6 +296,7 @@ serves a host that has no Steam library, where the wallpaper fills the backdrop.
   brief lists this as an open question.
 - The brief asks whether Apollo can read the wallpaper while running as a service. It
   can, through the user-context pattern described above, provided a user is signed in.
+  With no user signed in, the endpoint returns 404.
 
 ### Session data in serverinfo
 
@@ -323,7 +341,9 @@ These need no Apollo change. The facts below constrain the client.
 ### Files changed
 
 - `src/steam_activity.h`, `src/steam_activity.cpp`: parser, selection, art lookup,
-  wallpaper lookup, and the Windows locate steps behind `#ifdef _WIN32`.
+  wallpaper lookup, and the image loaders. Platform-neutral.
+- `src/steam_activity_host.cpp`: the Windows locate and impersonation steps behind
+  `#ifdef _WIN32`, and the 30-second cache.
 - `src/nvhttp.cpp`: three handlers and routes on `https_server`, and the
   `activeclient` element in the HTTPS `serverinfo`.
 - `src/crypto.h`: the permission bit.

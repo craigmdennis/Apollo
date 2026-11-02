@@ -1514,12 +1514,11 @@ namespace nvhttp {
     display_device::revert_configuration();
   }
 
-  void write_image(resp_https_t response, const std::filesystem::path &file, std::string_view type, const char *cache_control) {
-    std::ifstream in(file, std::ios::binary);
+  void write_image(resp_https_t response, const steam_activity::image_t &image, const char *cache_control) {
     SimpleWeb::CaseInsensitiveMultimap headers;
-    headers.emplace("Content-Type", std::string(type));
+    headers.emplace("Content-Type", image.type);
     headers.emplace("Cache-Control", cache_control);
-    response->write(SimpleWeb::StatusCode::success_ok, in, headers);
+    response->write(SimpleWeb::StatusCode::success_ok, image.data, headers);
     response->close_connection_after_response = true;
   }
 
@@ -1557,15 +1556,14 @@ namespace nvhttp {
     try {
       auto app_id = steam_activity::parse_app_id(request->path_match[1].str());
       auto kind = steam_activity::parse_art_kind(request->path_match[2].str());
-      auto root = steam_activity::locate_root();
-      if (!may_see_activity(get_verified_cert(request)) || !app_id || !kind || !root) {
+      if (!may_see_activity(get_verified_cert(request)) || !app_id || !kind) {
         return respond_not_found(response);
       }
-      auto file = steam_activity::find_art(*root, *app_id, *kind);
-      if (!file) {
+      auto image = steam_activity::current_art(*app_id, *kind);
+      if (!image) {
         return respond_not_found(response);
       }
-      write_image(response, *file, steam_activity::media_type_for_extension(*file), "max-age=3600");
+      write_image(response, *image, "max-age=3600");
     } catch (const std::exception &e) {
       BOOST_LOG(debug) << "Steam art failed: "sv << e.what();
       respond_not_found(response);
@@ -1582,12 +1580,11 @@ namespace nvhttp {
       if (!may_see_activity(get_verified_cert(request))) {
         return respond_not_found(response);
       }
-      auto file = steam_activity::current_wallpaper();
-      auto type = file ? steam_activity::wallpaper_type(*file) : std::string_view {};
-      if (type.empty()) {
+      auto image = steam_activity::current_wallpaper();
+      if (!image) {
         return respond_not_found(response);
       }
-      write_image(response, *file, type, "no-cache");
+      write_image(response, *image, "no-cache");
     } catch (const std::exception &e) {
       BOOST_LOG(debug) << "Wallpaper failed: "sv << e.what();
       respond_not_found(response);

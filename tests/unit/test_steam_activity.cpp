@@ -222,12 +222,48 @@ TEST_F(SteamActivityTest, PicksTheRegistryWallpaperThenTheTranscodedCopy) {
   EXPECT_EQ(pick_wallpaper({}, root / "gone"), std::nullopt);
 }
 
-TEST_F(SteamActivityTest, AcceptsOnlyImageWallpapersOfReasonableSize) {
+TEST_F(SteamActivityTest, LoadsOnlyImageWallpapersOfReasonableSize) {
   write(root / "a", "\xFF\xD8\xFF\xE0 data");
   write(root / "b", "not an image");
-  EXPECT_EQ(wallpaper_type(root / "a"), "image/jpeg");
-  EXPECT_EQ(wallpaper_type(root / "b"), "");
-  EXPECT_EQ(wallpaper_type(root / "missing"), "");
+  auto image = load_wallpaper(root / "a");
+  ASSERT_TRUE(image.has_value());
+  EXPECT_EQ(image->type, "image/jpeg");
+  EXPECT_EQ(image->data, "\xFF\xD8\xFF\xE0 data");
+  EXPECT_FALSE(load_wallpaper(root / "b").has_value());
+  EXPECT_FALSE(load_wallpaper(root / "missing").has_value());
   write(root / "c", "BM" + std::string(max_wallpaper_bytes, 'x'));
-  EXPECT_EQ(wallpaper_type(root / "c"), "");
+  EXPECT_FALSE(load_wallpaper(root / "c").has_value());
+}
+
+TEST_F(SteamActivityTest, LoadsArtByExtensionAndSize) {
+  write(root / "a.png", "png data");
+  write(root / "b.txt", "text");
+  write(root / "c.jpg", std::string(max_art_bytes + 1, 'x'));
+  auto image = load_art(root / "a.png");
+  ASSERT_TRUE(image.has_value());
+  EXPECT_EQ(image->type, "image/png");
+  EXPECT_EQ(image->data, "png data");
+  EXPECT_FALSE(load_art(root / "b.txt").has_value());
+  EXPECT_FALSE(load_art(root / "c.jpg").has_value());
+}
+
+TEST_F(SteamActivityTest, RefusesArtWhenTheCacheFolderIsALink) {
+  fs::create_directories(root / "elsewhere");
+  write(root / "elsewhere" / "600_library_hero.jpg", "x");
+  fs::create_directories(root / "appcache");
+  std::error_code ec;
+  fs::create_directory_symlink(root / "elsewhere", root / "appcache" / "librarycache", ec);
+  if (!ec) {
+    EXPECT_EQ(find_art(root, 600, art_kind::hero), std::nullopt);
+  }
+}
+
+TEST_F(SteamActivityTest, RefusesArtWhenAppcacheIsALink) {
+  fs::create_directories(root / "elsewhere" / "librarycache");
+  write(root / "elsewhere" / "librarycache" / "700_library_hero.jpg", "x");
+  std::error_code ec;
+  fs::create_directory_symlink(root / "elsewhere", root / "appcache", ec);
+  if (!ec) {
+    EXPECT_EQ(find_art(root, 700, art_kind::hero), std::nullopt);
+  }
 }

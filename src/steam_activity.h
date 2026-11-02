@@ -100,9 +100,16 @@ namespace steam_activity {
   constexpr uintmax_t max_art_bytes = 8ULL << 20;
   constexpr uintmax_t max_wallpaper_bytes = 20ULL << 20;
 
+  /** @brief An image held in memory, with its media type. */
+  struct image_t {
+    std::string type;
+    std::string data;
+  };
+
   /**
    * @brief Find the art file for an app in Steam's library cache. Handles the flat and nested layouts.
    * @return A file inside `<root>/appcache/librarycache` of at most `max_art_bytes`, or nothing.
+   *         Nothing is returned when `appcache` or `librarycache` is a link, because a link could point outside Steam.
    */
   std::optional<std::filesystem::path> find_art(const std::filesystem::path &root, uint32_t app_id, art_kind kind);
 
@@ -117,9 +124,14 @@ namespace steam_activity {
   std::string_view sniff_image_type(std::string_view head);
 
   /**
-   * @brief Media type of a wallpaper file when it is a JPEG, PNG, or BMP of at most `max_wallpaper_bytes`.
+   * @brief Read an art file when its extension names a supported type and it fits in `max_art_bytes`.
    */
-  std::string_view wallpaper_type(const std::filesystem::path &file);
+  std::optional<image_t> load_art(const std::filesystem::path &file);
+
+  /**
+   * @brief Read a wallpaper when its first bytes are a JPEG, PNG, or BMP and it fits in `max_wallpaper_bytes`.
+   */
+  std::optional<image_t> load_wallpaper(const std::filesystem::path &file);
 
   /**
    * @brief Choose the wallpaper file: the registry path when it names a file, else the transcoded copy.
@@ -127,8 +139,12 @@ namespace steam_activity {
   std::optional<std::filesystem::path> pick_wallpaper(const std::filesystem::path &registry_path, const std::filesystem::path &transcoded);
 
   // Windows-backed lookups. On other platforms they report that nothing is installed.
+  //
+  // Apollo's process runs as SYSTEM. These functions read every file whose path a user can influence
+  // (Steam's folders, the wallpaper) while impersonating the signed-in console user, so the user's own
+  // access rights apply and a link cannot make Apollo read something the user cannot.
 
-  /** @brief Steam root, or nothing when Steam is not installed. */
+  /** @brief Steam root from the machine-wide registry key, or nothing when Steam is not installed. */
   std::optional<std::filesystem::path> locate_root();
 
   /**
@@ -137,6 +153,9 @@ namespace steam_activity {
    */
   nlohmann::json current_activity();
 
-  /** @brief Wallpaper file of the signed-in console user, or nothing. */
-  std::optional<std::filesystem::path> current_wallpaper();
+  /** @brief Art for an app. Nothing when no user is signed in or no file matches. */
+  std::optional<image_t> current_art(uint32_t app_id, art_kind kind);
+
+  /** @brief Wallpaper of the signed-in console user. Nothing when no user is signed in. */
+  std::optional<image_t> current_wallpaper();
 }  // namespace steam_activity
