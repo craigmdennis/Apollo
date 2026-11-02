@@ -6,7 +6,9 @@
 
 // standard includes
 #include <chrono>
+#include <functional>
 #include <string_view>
+#include <system_error>
 
 // platform includes
 #include <Windows.h>
@@ -33,4 +35,19 @@ namespace platf {
    * @return The converted UTF-8 string.
    */
   std::string to_utf8(const std::wstring_view &string);
+
+  /**
+   * @brief Obtain the current console session user's primary token.
+   * @param elevated Request the elevated token when the user is an administrator.
+   * @return The token, or `nullptr` when no user is signed in. The caller closes it.
+   */
+  HANDLE retrieve_users_token(bool elevated);
+
+  /**
+   * @brief Run the callback while impersonating the user.
+   * @param user_token A token from `retrieve_users_token`.
+   * @param callback The function to run as the user.
+   * @return An error code, empty on success.
+   */
+  std::error_code impersonate_current_user(HANDLE user_token, std::function<void()> callback);
 }  // namespace platf

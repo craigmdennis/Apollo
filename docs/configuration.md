@@ -1930,6 +1930,33 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
+### share_game_activity
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Lets clients that hold the "Share game activity" permission read the last Steam game played
+            on this PC, the name of the device that is streaming to it, and the desktop wallpaper.
+            Turn this off to share nothing, whatever each client's permission.
+            @note{The first client paired with this PC receives the permission by default.
+            Later clients do not, until it is granted in the Clients list.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            enabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            share_game_activity = disabled
+            @endcode</td>
+    </tr>
+</table>
+
 ### hevc_mode
 
 <table>

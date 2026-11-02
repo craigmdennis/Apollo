@@ -1956,6 +1956,10 @@ namespace stream {
       return session.device_uuid;
     }
 
+    std::string device_name(const session_t& session) {
+      return session.device_name;
+    }
+
     bool uuid_match(const session_t &session, const std::string_view& uuid) {
       return session.device_uuid == uuid;
     }

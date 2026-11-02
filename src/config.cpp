@@ -598,6 +598,7 @@ namespace config {
     platf::appdata().string() + "/sunshine.log",  // log file
     false,  // notify_pre_releases
     false,  // legacy_ordering
+    true,  // share_game_activity
     true,  // system_tray
     {},  // prep commands
     {},  // state commands
@@ -1301,6 +1302,7 @@ namespace config {
     bool_f(vars, "envvar_compatibility_mode", sunshine.envvar_compatibility_mode);
     bool_f(vars, "notify_pre_releases", sunshine.notify_pre_releases);
     bool_f(vars, "legacy_ordering", sunshine.legacy_ordering);
+    bool_f(vars, "share_game_activity", sunshine.share_game_activity);
     bool_f(vars, "forward_rumble", input.forward_rumble);
 
     int port = sunshine.port;

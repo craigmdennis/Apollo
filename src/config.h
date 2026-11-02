@@ -285,6 +285,7 @@ namespace config {
     std::string log_file;
     bool notify_pre_releases;
     bool legacy_ordering;
+    bool share_game_activity;
     bool system_tray;
     std::vector<prep_cmd_t> prep_cmds;
     std::vector<prep_cmd_t> state_cmds;

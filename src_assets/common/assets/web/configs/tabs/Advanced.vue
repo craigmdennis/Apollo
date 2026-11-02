@@ -50,6 +50,14 @@ const config = ref(props.config)
               default="false"
     ></Checkbox>
 
+    <!-- Share game activity -->
+    <Checkbox class="mb-3"
+              id="share_game_activity"
+              locale-prefix="config"
+              v-model="config.share_game_activity"
+              default="true"
+    ></Checkbox>
+
     <!-- Legacy ordering -->
     <Checkbox class="mb-3"
               id="legacy_ordering"

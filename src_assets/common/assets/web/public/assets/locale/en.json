@@ -323,7 +323,9 @@
     "lan_encryption_mode_2": "Required for all clients",
     "lan_encryption_mode_desc": "This determines when encryption will be used when streaming over your local network. Encryption can reduce streaming performance, particularly on less powerful hosts and clients.",
     "legacy_ordering": "App ordering for legacy clients",
-    "legacy_ordering_desc": "Enable ordering support workaround for legacy clients. Can cause issues with clients or scripts that can't handle UTF8 correctly. Artemis clients support this by default.",
+    "share_game_activity": "Share game activity",
+    "share_game_activity_desc": "Lets clients with the \"Share game activity\" permission see the last Steam game played on this PC, the name of the device streaming to it, and the desktop wallpaper. Turn off to share nothing, whatever each client's permission.",
+    "legacy_ordering_desc":"Enable ordering support workaround for legacy clients. Can cause issues with clients or scripts that can't handle UTF8 correctly. Artemis clients support this by default.",
     "limit_framerate": "Limit capture framerate",
     "limit_framerate_desc": "Limit the framerate being captured to client requested framerate. May not run at full framerate if vsync is enabled and display refreshrate does not match requested framerate. Could cause lag on some clients if disabled.",
     "locale": "Locale",
@@ -516,6 +518,7 @@
     "file_upload": "File Upload",
     "file_dwnload": "File Download",
     "server_cmd": "Server Command",
+    "share_activity": "Share game activity",
     "list": "List Apps",
     "view": "View Streams",
     "launch": "Launch Apps"

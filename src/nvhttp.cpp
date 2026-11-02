@@ -32,6 +32,7 @@
 #include "platform/common.h"
 #include "process.h"
 #include "rtsp.h"
+#include "steam_activity.h"
 #include "stream.h"
 #include "system_tray.h"
 #include "utility.h"
@@ -666,6 +667,13 @@ namespace nvhttp {
     return (crypto::named_cert_t*)request->userp.get();
   }
 
+  /**
+   * @brief Whether a client may read game activity: the host switch is on and the client holds the permission.
+   */
+  bool may_see_activity(const crypto::named_cert_t *cert) {
+    return config::sunshine.share_game_activity && !!(cert->perm & PERM::share_activity);
+  }
+
   template <class T>
   void print_req(std::shared_ptr<typename SimpleWeb::ServerBase<T>::Request> request) {
     BOOST_LOG(debug) << "TUNNEL :: "sv << tunnel<T>::to_string;
@@ -999,6 +1007,20 @@ namespace nvhttp {
       tree.put("root.currentgame", current_appid);
       tree.put("root.currentgameuuid", proc::proc.get_running_app_uuid());
       tree.put("root.state", current_appid > 0 ? "SUNSHINE_SERVER_BUSY" : "SUNSHINE_SERVER_FREE");
+
+      // Name of the device that is streaming. Only clients allowed to see game activity receive it.
+      std::string active_client;
+      if (current_appid > 0 && may_see_activity(get_verified_cert(request))) {
+        for (const auto &uuid : rtsp_stream::get_all_session_uuids()) {
+          if (auto session = rtsp_stream::find_session(uuid)) {
+            active_client = stream::session::device_name(*session);
+            if (!active_client.empty()) {
+              break;
+            }
+          }
+        }
+      }
+      tree.put("root.activeclient", active_client);
     } else {
       tree.put("root.currentgame", 0);
       tree.put("root.currentgameuuid", "");
@@ -1492,6 +1514,86 @@ namespace nvhttp {
     display_device::revert_configuration();
   }
 
+  void write_image(resp_https_t response, const std::filesystem::path &file, std::string_view type, const char *cache_control) {
+    std::ifstream in(file, std::ios::binary);
+    SimpleWeb::CaseInsensitiveMultimap headers;
+    headers.emplace("Content-Type", std::string(type));
+    headers.emplace("Cache-Control", cache_control);
+    response->write(SimpleWeb::StatusCode::success_ok, in, headers);
+    response->close_connection_after_response = true;
+  }
+
+  void respond_not_found(resp_https_t response) {
+    response->write(SimpleWeb::StatusCode::client_error_not_found);
+    response->close_connection_after_response = true;
+  }
+
+  /**
+   * @brief GET /moonlight/steam: the last Steam game played on this host.
+   */
+  void steamActivity(resp_https_t response, req_https_t request) {
+    print_req<SunshineHTTPS>(request);
+
+    nlohmann::json body;
+    try {
+      body = may_see_activity(get_verified_cert(request)) ? steam_activity::current_activity() : steam_activity::json_withheld();
+    } catch (const std::exception &e) {
+      BOOST_LOG(debug) << "Steam activity failed: "sv << e.what();
+      body = steam_activity::json_no_steam();
+    }
+
+    SimpleWeb::CaseInsensitiveMultimap headers;
+    headers.emplace("Content-Type", "application/json");
+    response->write(SimpleWeb::StatusCode::success_ok, body.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace), headers);
+    response->close_connection_after_response = true;
+  }
+
+  /**
+   * @brief GET /moonlight/steam/art/{appId}/{kind}: hero, logo, or capsule art from Steam's library cache.
+   */
+  void steamArt(resp_https_t response, req_https_t request) {
+    print_req<SunshineHTTPS>(request);
+
+    try {
+      auto app_id = steam_activity::parse_app_id(request->path_match[1].str());
+      auto kind = steam_activity::parse_art_kind(request->path_match[2].str());
+      auto root = steam_activity::locate_root();
+      if (!may_see_activity(get_verified_cert(request)) || !app_id || !kind || !root) {
+        return respond_not_found(response);
+      }
+      auto file = steam_activity::find_art(*root, *app_id, *kind);
+      if (!file) {
+        return respond_not_found(response);
+      }
+      write_image(response, *file, steam_activity::media_type_for_extension(*file), "max-age=3600");
+    } catch (const std::exception &e) {
+      BOOST_LOG(debug) << "Steam art failed: "sv << e.what();
+      respond_not_found(response);
+    }
+  }
+
+  /**
+   * @brief GET /moonlight/wallpaper: the signed-in user's desktop wallpaper.
+   */
+  void wallpaper(resp_https_t response, req_https_t request) {
+    print_req<SunshineHTTPS>(request);
+
+    try {
+      if (!may_see_activity(get_verified_cert(request))) {
+        return respond_not_found(response);
+      }
+      auto file = steam_activity::current_wallpaper();
+      auto type = file ? steam_activity::wallpaper_type(*file) : std::string_view {};
+      if (type.empty()) {
+        return respond_not_found(response);
+      }
+      write_image(response, *file, type, "no-cache");
+    } catch (const std::exception &e) {
+      BOOST_LOG(debug) << "Wallpaper failed: "sv << e.what();
+      respond_not_found(response);
+    }
+  }
+
   void appasset(resp_https_t response, req_https_t request) {
     print_req<SunshineHTTPS>(request);
 
@@ -1719,6 +1821,9 @@ namespace nvhttp {
     https_server.resource["^/pair$"]["GET"] = pair<SunshineHTTPS>;
     https_server.resource["^/applist$"]["GET"] = applist;
     https_server.resource["^/appasset$"]["GET"] = appasset;
+    https_server.resource["^/moonlight/steam$"]["GET"] = steamActivity;
+    https_server.resource["^/moonlight/steam/art/([0-9]{1,10})/(hero|logo|capsule)$"]["GET"] = steamArt;
+    https_server.resource["^/moonlight/wallpaper$"]["GET"] = wallpaper;
     https_server.resource["^/launch$"]["GET"] = [&host_audio](auto resp, auto req) {
       launch(host_audio, resp, req);
     };
