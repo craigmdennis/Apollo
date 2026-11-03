@@ -63,6 +63,7 @@ blog/
 # Reference microphone sender state files
 tests/mic_standalone/.send_test_tone.json
 tests/mic_standalone/.send_test_tone.pem
+tests/steam_standalone/.check_endpoints.*
 
 # Written into the working directory when test_sunshine runs from the repository root
 test_sunshine.log
