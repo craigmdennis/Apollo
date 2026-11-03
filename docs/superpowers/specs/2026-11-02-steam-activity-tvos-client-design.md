@@ -583,17 +583,19 @@ app".
 ### Pairing and adding
 
 Pairing shows a four-digit PIN with a spinner. The person types the PIN into Apollo on
-the host. Pairing starts by itself when focus rests on an unpaired tile for 600 ms and
-cancels when focus moves away. A new PIN replaces the old one when it expires. The
-lifetime is a prototype value of 30 seconds and the real value is undecided.
+the host. Pairing starts only when the person selects an unpaired tile with OK, and
+cancels when focus moves away. Resting on a tile starts nothing: an unpaired computer
+that is merely focused looks like any other card. A new PIN replaces the old one when
+it expires. The lifetime is a prototype value of 30 seconds and the real value is
+undecided.
 
 Add Computer opens a full-screen field prefilled with the first three parts of the
 Apple TV's own address. A search follows, then a new Not Paired tile or the "Couldn't
 find a computer at `<address>`" line.
 
-Starting pairing on focus changes the state of a host the person has only looked at.
-The 600 ms delay limits this. The implementer confirms that an unattended pairing
-request on a host is harmless and expires.
+Pairing on focus was tried in the prototype and rejected: starting a request on a
+computer the person only looked at was confusing, and it read as something to stop
+rather than something they had asked for.
 
 ### Settings
 
