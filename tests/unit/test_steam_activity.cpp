@@ -306,3 +306,34 @@ TEST_F(SteamActivityTest, RefusesArtWhenAppcacheIsALink) {
     EXPECT_EQ(find_art(root, 700, art_kind::hero), std::nullopt);
   }
 }
+
+TEST_F(SteamActivityTest, IgnoresLibraryFoldersThatAreNotAbsoluteLocalPaths) {
+  fs::path relative = "relative_lib";
+  write(root / "steamapps" / "libraryfolders.vdf",
+        "\"libraryfolders\" { \"1\" { \"path\" \"relative_lib\" } \"2\" { \"path\" \"//server/share\" } \"3\" { \"path\" \"\\\\\\\\server\\\\share\" } }");
+  manifest(root / relative, 100, "Game A");
+  localconfig(42, app(100, 300));
+
+  // Relative paths resolve against the working directory, so run from the folder that would match.
+  auto previous = fs::current_path();
+  fs::current_path(root);
+  auto a = read_activity(root, 42, 0, 1000);
+  fs::current_path(previous);
+
+  EXPECT_TRUE(a.recent.empty());
+}
+
+TEST_F(SteamActivityTest, RefusesAnAccountIdThatDoesNotFitIn32Bits) {
+  auto doc = parse_kv("\"users\" { \"" + std::to_string(steam_id_base + (1ULL << 32) + 5) + "\" { \"MostRecent\" \"1\" } }");
+  EXPECT_EQ(most_recent_account(doc), std::nullopt);
+}
+
+TEST_F(SteamActivityTest, RefusesAKeyValuesFileOverTheSizeLimit) {
+  auto file = root / "config" / "loginusers.vdf";
+  write(file, "\"users\" { }");
+  EXPECT_TRUE(read_kv_file(file).has_value());
+
+  fs::resize_file(file, max_kv_bytes + 1);
+  EXPECT_FALSE(read_kv_file(file).has_value());
+  EXPECT_FALSE(read_kv_file(root / "missing.vdf").has_value());
+}

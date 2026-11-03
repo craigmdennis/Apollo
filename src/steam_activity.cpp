@@ -121,6 +121,11 @@ namespace steam_activity {
     }
 
     std::optional<kv_t> read_kv(const fs::path &file) {
+      // A user who can write Steam's folder could otherwise make Apollo load a file of any size.
+      std::error_code ec;
+      if (!fs::is_regular_file(file, ec) || fs::file_size(file, ec) > max_kv_bytes || ec) {
+        return std::nullopt;
+      }
       auto text = read_text(file);
       if (!text) {
         return std::nullopt;
@@ -159,6 +164,11 @@ namespace steam_activity {
           continue;
         }
         fs::path lib {text};
+        // A relative path depends on the working directory, and a UNC path would make Apollo
+        // authenticate to another machine. Neither is a Steam library on this PC.
+        if (!lib.is_absolute() || text.starts_with("\\\\") || text.starts_with("//")) {
+          continue;
+        }
         if (std::ranges::none_of(libs, [&](const fs::path &p) {
               return p.lexically_normal() == lib.lexically_normal();
             })) {
@@ -187,6 +197,10 @@ namespace steam_activity {
       return !rel.empty() && *rel.begin() != "..";
     }
   }  // namespace
+
+  std::optional<kv_t> read_kv_file(const fs::path &file) {
+    return read_kv(file);
+  }
 
   const kv_t *kv_t::find(std::string_view key) const {
     for (const auto &[k, v] : children) {

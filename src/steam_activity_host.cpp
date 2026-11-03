@@ -10,7 +10,6 @@
 
 // standard includes
 #include <chrono>
-#include <fstream>
 #include <functional>
 #include <mutex>
 
@@ -169,35 +168,45 @@ namespace steam_activity {
   }
 
   namespace {
+    // Called only from current_activity(), which holds its mutex.
     nlohmann::json build_activity() {
+      // The last result built while a user was signed in. While nobody is, Apollo serves it and reads
+      // nothing: the Steam folders can be writable by a standard user, and SYSTEM must not open
+      // paths that user chose.
+      static nlohmann::json last_good;
+
       auto root = locate_root();
       if (!root) {
         return json_no_steam();
       }
-      auto now = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-      nlohmann::json out = json_no_steam();
-
-      auto work = [&](const user_values_t &values) {
-        uint32_t account = values.account_id;
-        if (account == 0) {
-          // No Steam session in the user's hive, so use the last account that signed in.
-          std::ifstream in(*root / "config" / "loginusers.vdf", std::ios::binary);
-          std::string text(std::istreambuf_iterator<char>(in), {});
-          account = most_recent_account(parse_kv(text)).value_or(0);
-        }
-        out = to_json(read_activity(*root, account, values.running_app_id, now));
-      };
 
       console_user_t user;
-      if (user) {
-        user.run([&] {
-          try {
-            work(read_user_values());
-          } catch (...) {
+      if (!user) {
+        return last_good.is_null() ? json_no_steam() : last_good;
+      }
+
+      auto now = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+      nlohmann::json out = json_no_steam();
+      bool built = false;
+
+      user.run([&] {
+        try {
+          auto values = read_user_values();
+          uint32_t account = values.account_id;
+          if (account == 0) {
+            // No Steam session in the user's hive, so use the last account that signed in.
+            if (auto doc = read_kv_file(*root / "config" / "loginusers.vdf")) {
+              account = most_recent_account(*doc).value_or(0);
+            }
           }
-        });
-      } else {
-        work({});
+          out = to_json(read_activity(*root, account, values.running_app_id, now));
+          built = true;
+        } catch (...) {
+        }
+      });
+
+      if (built) {
+        last_good = out;
       }
       return out;
     }

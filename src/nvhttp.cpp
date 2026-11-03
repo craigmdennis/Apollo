@@ -1518,6 +1518,7 @@ namespace nvhttp {
     SimpleWeb::CaseInsensitiveMultimap headers;
     headers.emplace("Content-Type", image.type);
     headers.emplace("Cache-Control", cache_control);
+    headers.emplace("X-Content-Type-Options", "nosniff");
     response->write(SimpleWeb::StatusCode::success_ok, image.data, headers);
     response->close_connection_after_response = true;
   }

@@ -127,14 +127,16 @@ runs a callback as that user, and `override_per_user_predefined_keys` points
 `HKEY_CURRENT_USER` at the user's hive. Every per-user read in the activity reader
 runs inside that pattern:
 
-1. Obtain the console user's token. If none exists (no one is signed in), skip the
-   per-user reads.
+1. Obtain the console user's token. If none exists (no one is signed in), read
+   nothing.
 2. Impersonate the user, open the user's hive with `RegOpenCurrentUser`, read the
    values, and revert.
 
-Per-user reads are the Steam account and running game, and the wallpaper. When no one
-is signed in, the Steam account falls back to `loginusers.vdf`, the running game is
-`null`, and the art and wallpaper endpoints return 404.
+Per-user reads are the Steam account and running game, the Steam files, and the
+wallpaper. All of them run while impersonating the user. When no one is signed in,
+`/moonlight/steam` returns the last result built while someone was signed in, which
+Apollo keeps in memory, or the no-Steam response when it has none (for example after
+an Apollo restart with nobody signed in). The art and wallpaper endpoints return 404.
 
 **Trust boundary.** SYSTEM can read files the signed-in user cannot, and the user
 controls the wallpaper path, the contents of Steam's folders, and anything in their
@@ -383,8 +385,9 @@ this document.
    have their manifest there.
 4. List `appcache\librarycache` for one old game and one recent game. Record which
    layout each uses and the exact file names.
-5. Sign out of Windows and confirm `HKLM`, `loginusers.vdf`, and `userdata` remain
-   readable by the SYSTEM account.
+5. Sign out of Windows and confirm `/moonlight/steam` returns the last result from
+   before the sign-out, with its original `updatedAt`, and that Apollo reads no Steam
+   file while signed out.
 6. Confirm Steam in offline mode still writes `LastPlayed`.
 7. Log the `HKCU` Steam values from inside Apollo, once without and once with user
    impersonation, to confirm the user hive is the one that holds them.

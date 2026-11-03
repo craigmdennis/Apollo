@@ -45,6 +45,14 @@ namespace steam_activity {
    */
   kv_t parse_kv(std::string_view text);
 
+  /// Largest KeyValues file that is read. A heavy `localconfig.vdf` is a few megabytes.
+  constexpr uintmax_t max_kv_bytes = 32ULL << 20;
+
+  /**
+   * @brief Read and parse a KeyValues file. Nothing when it is missing, not a regular file, or over `max_kv_bytes`.
+   */
+  std::optional<kv_t> read_kv_file(const std::filesystem::path &file);
+
   constexpr uint64_t steam_id_base = 76561197960265728ULL;
 
   inline uint64_t to_steam_id(uint32_t account_id) {
