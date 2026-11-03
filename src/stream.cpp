@@ -1009,6 +1009,11 @@ namespace stream {
         return;
       }
 
+      if (payload.empty()) {
+        BOOST_LOG(warning) << "Server command packet has no command index"sv;
+        return;
+      }
+
       uint8_t cmdIndex = *(uint8_t*)payload.data();
 
       if (cmdIndex < config::sunshine.server_cmds.size()) {
