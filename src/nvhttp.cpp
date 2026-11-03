@@ -6,9 +6,11 @@
 #define BOOST_BIND_GLOBAL_PLACEHOLDERS
 
 // standard includes
+#include <chrono>
 #include <filesystem>
 #include <format>
 #include <string>
+#include <thread>
 #include <utility>
 #include <string>
 
@@ -1592,6 +1594,66 @@ namespace nvhttp {
     }
   }
 
+  /**
+   * @brief POST /moonlight/sleep: suspend the host.
+   */
+  void sleepHost(resp_https_t response, req_https_t request) {
+    print_req<SunshineHTTPS>(request);
+
+    pt::ptree tree;
+    auto g = util::fail_guard([&]() {
+      std::ostringstream data;
+
+      pt::write_xml(data, tree);
+      response->write(data.str());
+      response->close_connection_after_response = true;
+    });
+
+    auto named_cert_p = get_verified_cert(request);
+    if (!(named_cert_p->perm & PERM::launch)) {
+      BOOST_LOG(debug) << "Permission Sleep denied for [" << named_cert_p->name << "] (" << (uint32_t)named_cert_p->perm << ")";
+
+      tree.put("root.<xmlattr>.status_code", 403);
+      tree.put("root.<xmlattr>.status_message", "Permission denied");
+
+      return;
+    }
+
+#ifndef _WIN32
+    tree.put("root.<xmlattr>.status_code", 501);
+    tree.put("root.<xmlattr>.status_message", "Sleep is not supported on this host");
+
+    return;
+#endif
+
+    // Sleeping ends any session, so never cut off another device mid-stream
+    if (rtsp_stream::session_count() > 0) {
+      BOOST_LOG(info) << "Sleep requested while a session is running"sv;
+
+      tree.put("root.<xmlattr>.status_code", 409);
+      tree.put("root.<xmlattr>.status_message", "A session is running");
+
+      return;
+    }
+
+    // A session that just ended may have left the display configuration behind
+    display_device::revert_configuration();
+
+    BOOST_LOG(info) << "Sleeping the host at the request of [" << named_cert_p->name << ']';
+
+    tree.put("root.sleep", 1);
+    tree.put("root.<xmlattr>.status_code", 200);
+
+    // SetSuspendState blocks until the host wakes, so answer the client first
+    std::thread suspend([] {
+      std::this_thread::sleep_for(500ms);
+      if (!platf::system_sleep()) {
+        BOOST_LOG(error) << "Failed to suspend the host"sv;
+      }
+    });
+    suspend.detach();
+  }
+
   void appasset(resp_https_t response, req_https_t request) {
     print_req<SunshineHTTPS>(request);
 
@@ -1822,6 +1884,7 @@ namespace nvhttp {
     https_server.resource["^/moonlight/steam$"]["GET"] = steamActivity;
     https_server.resource["^/moonlight/steam/art/([0-9]{1,10})/(hero|logo|capsule)$"]["GET"] = steamArt;
     https_server.resource["^/moonlight/wallpaper$"]["GET"] = wallpaper;
+    https_server.resource["^/moonlight/sleep$"]["POST"] = sleepHost;
     https_server.resource["^/launch$"]["GET"] = [&host_audio](auto resp, auto req) {
       launch(host_audio, resp, req);
     };

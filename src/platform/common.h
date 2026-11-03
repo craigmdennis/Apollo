@@ -937,4 +937,13 @@ namespace platf {
   bool
   set_clipboard(const std::string& content);
 
+  /**
+   * @brief Suspend the host to sleep.
+   * @details The caller answers the client before this returns, so a backend that
+   * blocks until the host wakes is acceptable.
+   * @return `true` if the platform accepted the request.
+   */
+  bool
+  system_sleep();
+
 }  // namespace platf

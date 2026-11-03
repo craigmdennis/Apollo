@@ -119,6 +119,19 @@ The wallpaper is the registry value `Control Panel\Desktop\WallPaper`, or else `
 
 Both routes answer 404 when the file is missing, the identifier is invalid, the client lacks the permission, or no user is signed in.
 
+### Sleeping the PC
+
+The Apple TV client offers Sleep in the hold menu. It sends `POST /moonlight/sleep` to the same paired HTTPS channel. The response is the usual GameStream XML.
+
+| Case | Body |
+|---|---|
+| Accepted | Status 200, `sleep` is 1 |
+| The client lacks the `launch` permission | Status 403, `Permission denied` |
+| A stream is running | Status 409, `A session is running` |
+| Apollo does not run on Windows | Status 501, `Sleep is not supported on this host` |
+
+Sleep ends any session, so Apollo refuses while a stream runs instead of cutting another device off. Before it suspends, it reverts the display configuration that a finished session may have left behind. It answers 200 first, because `SetSuspendState` does not return until the PC wakes. Suspending needs the shutdown privilege, which Apollo enables on its own process; a failure is logged only, as the client has been answered by then.
+
 ### The device that is streaming
 
 The HTTPS `serverinfo` response gains an `activeclient` element. It holds the device name of the running stream, or is empty when none runs. It is empty for a client without the permission. The plain HTTP `serverinfo` does not carry it. Whether stock Moonlight clients ignore the element is not yet confirmed against their parsers.
