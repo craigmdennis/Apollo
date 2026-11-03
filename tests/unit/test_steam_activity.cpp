@@ -216,6 +216,15 @@ TEST_F(SteamActivityTest, FindsArtInTheNestedLayout) {
   EXPECT_EQ(find_art(root, 200, art_kind::logo), std::nullopt);
 }
 
+TEST_F(SteamActivityTest, FindsCapsuleUnderCurrentSteamNames) {
+  auto cache = root / "appcache" / "librarycache";
+  write(cache / "200" / "abc123" / "library_capsule.jpg", "x");
+  write(cache / "200" / "def456" / "library_header.jpg", "x");
+  EXPECT_EQ(find_art(root, 200, art_kind::capsule)->filename(), "library_capsule.jpg");
+  write(cache / "300" / "def456" / "library_header.jpg", "x");
+  EXPECT_EQ(find_art(root, 300, art_kind::capsule)->filename(), "library_header.jpg");
+}
+
 TEST_F(SteamActivityTest, RefusesArtThatLeavesTheCacheOrIsTooLarge) {
   auto cache = root / "appcache" / "librarycache";
   fs::create_directories(cache);

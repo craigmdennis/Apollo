@@ -435,7 +435,8 @@ namespace steam_activity {
         names = {"logo.png"};
         break;
       case art_kind::capsule:
-        names = {"library_600x900.jpg", "header.jpg"};
+        // Current Steam clients write library_capsule.jpg and library_header.jpg instead.
+        names = {"library_600x900.jpg", "library_capsule.jpg", "header.jpg", "library_header.jpg"};
         break;
     }
 
