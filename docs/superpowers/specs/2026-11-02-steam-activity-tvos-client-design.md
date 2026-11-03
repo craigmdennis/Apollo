@@ -54,8 +54,9 @@ From the brief:
 - A network test that measures latency and bandwidth to the host. Version 1 uses the
   existing Moonlight port test.
 - The relay that refreshes the cache of a sleeping host (version 2).
-- A recently played row, launching the last-played game directly, SteamGridDB art,
-  and Top Shelf.
+- A recently played row, launching the last-played game directly, SteamGridDB art
+  (version 2), and Top Shelf.
+- A rotating backdrop (version 2).
 - The iPhone and Mac apps. The data layer is written so they can reuse it.
 
 Added here:
@@ -663,6 +664,92 @@ These need a decision before the matching step.
 6. Whether quitting Steam Big Picture also closes a game started from inside it
    (checklist item 9).
 7. In version 2, whether `rtime_last_played` is returned for both accounts.
+
+## Version 2
+
+Decided during Windows host testing on 2026-11-03. Version 1 ships without these.
+
+### Why
+
+Steam's local art is too small for a television. The capsule is 300×450 and the
+header 460×215. Only the hero (1920×620) and the logo (640×224) are usable as they are.
+The Apple TV is where this screen is seen, so the backdrop needs the highest
+resolution available and should not sit on one still image.
+
+### SteamGridDB art
+
+- Source: the SteamGridDB API v2 (`https://www.steamgriddb.com/api/v2`), queried by
+  Steam app ID.
+- Assume the app is published. Each user then supplies their own SteamGridDB API key,
+  because every key belongs to a SteamGridDB account, and SteamGridDB's terms on
+  shipping one shared key in a published app are unconfirmed. Ask SteamGridDB before
+  relying on a shared key.
+- The key lives in Apollo, entered once per host in the web UI, so every client of
+  that host gets the art without its own setup. This drops the version 1 goal
+  "Apollo needs no Steam login and no API key" for version 2.
+- Apollo fetches from SteamGridDB, caches the images on disk, and serves them through
+  the existing art endpoint with the same sharing checks. Local Steam art stays the
+  fallback when there is no key, no network, or no result.
+- A SteamGridDB failure must not affect pairing, app launch, or streaming (see
+  Anti-goals).
+
+### Choosing the image
+
+- Take the first result. Do not build a picker.
+- Before taking it, filter out NSFW, humor, and epilepsy-flagged images, and animated
+  images. Confirm the filter parameters against the API documentation.
+- Take that image at its maximum resolution, preferring a 16:9 image where the API
+  offers one.
+
+### Display
+
+- The backdrop uses aspect fill (object fill): the image covers the whole screen and
+  is cropped where its aspect ratio differs from 16:9. SteamGridDB heroes are wider
+  than 16:9 (for example 1920×620 or 3840×1240), so the sides are cropped.
+
+### Rotating backdrop
+
+- While a host is focused, the backdrop rotates through the hero of each recent game
+  (up to five), starting with the last-played game. Each image is the first
+  SteamGridDB result for that game, or the local hero when there is none.
+- Each image shows for about 8 to 10 seconds and changes with the same cross-fade as a
+  focus change.
+- A game with no hero is skipped. A host with no Steam games shows its wallpaper as in
+  version 1.
+- The status line keeps describing the last-played game. It does not change with each
+  image.
+- With Reduce Motion on, rotation stops and the last-played hero is shown.
+- The client's data layer caches up to five heroes per host instead of one.
+
+### Fetching and caching
+
+The client never knows where an image came from. It asks the host's art endpoint, and
+the host answers with the SteamGridDB image when it has one and the local Steam image
+otherwise. Two caches each do one job:
+
+| Cache | Lives on | Job |
+|---|---|---|
+| Image cache | Host (Apollo) | Avoid a SteamGridDB request per art request, and keep serving when SteamGridDB is slow or down. |
+| Per-host store | Client | Show the right art when the host is asleep or off (version 1 goal). |
+
+Host:
+
+- When the activity reader sees a game in `recent` with no cached SteamGridDB image, it
+  fetches that game's images in the background and saves them on disk, keyed by app ID
+  and kind.
+- The art endpoint never waits on SteamGridDB. Until the fetch finishes, it serves the
+  local Steam image.
+- Cached images are refreshed after about 30 days, because SteamGridDB rankings change
+  as people vote. A failed refresh keeps the old image.
+- Images for games no longer in `recent` may be removed after the same period.
+
+Client:
+
+- The fetch triggers stay as in version 1. The activity JSON is small, so the 60-second
+  poll detects a game change cheaply.
+- Images are keyed by app ID. When `recent` changes, the client fetches only the heroes
+  it does not hold and drops those no longer listed. Usually that is one image.
+- A fetch that fails leaves the store unchanged, as in version 1.
 
 ## Known limitation
 
