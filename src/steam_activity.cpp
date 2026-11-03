@@ -157,6 +157,17 @@ namespace steam_activity {
       return c == '/' || c == '\\';
     }
 
+    // Accepts only a local absolute path. On Windows that is a drive letter, a colon, and a separator,
+    // which excludes every network, device and extended-length form (\\server, \\?\, \\.\, \??\).
+    // Elsewhere it is a rooted path that does not start with two separators.
+    bool is_local_path(const std::string &text) {
+#ifdef _WIN32
+      return text.size() >= 3 && std::isalpha(static_cast<unsigned char>(text[0])) && text[1] == ':' && is_separator(text[2]);
+#else
+      return text.size() > 1 && is_separator(text[0]) && !is_separator(text[1]);
+#endif
+    }
+
     // The main Steam folder first, then every library folder that libraryfolders.vdf lists.
     std::vector<fs::path> library_paths(const fs::path &root) {
       std::vector<fs::path> libs {root};
@@ -181,7 +192,7 @@ namespace steam_activity {
         fs::path lib {text};
         // A relative path depends on the working directory, and a UNC path would make Apollo
         // authenticate to another machine. Neither is a Steam library on this PC.
-        if (!lib.is_absolute() || (text.size() > 1 && is_separator(text[0]) && is_separator(text[1]))) {
+        if (!is_local_path(text) || !lib.is_absolute()) {
           continue;
         }
         if (std::ranges::none_of(libs, [&](const fs::path &p) {
