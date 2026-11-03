@@ -9,8 +9,15 @@ namespace mic {
     if (started && sequence < next_sequence) {
       return false;
     }
+    if (!started && have_floor && sequence < floor_sequence) {
+      return false;
+    }
     if (!frames.emplace(sequence, std::move(payload)).second) {
       return false;
+    }
+    if (!have_highest || sequence > highest) {
+      have_highest = true;
+      highest = sequence;
     }
 
     while (frames.size() > MAX_FRAMES) {
@@ -33,6 +40,8 @@ namespace mic {
       if (++empty_pops > MAX_EMPTY_CONCEAL) {
         started = false;
         empty_pops = 0;
+        have_floor = have_highest;
+        floor_sequence = highest + 1;
         return {pop_e::wait, {}};
       }
       ++next_sequence;

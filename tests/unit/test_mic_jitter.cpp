@@ -126,3 +126,28 @@ TEST(MicJitter, SkipsALargeGap) {
   ASSERT_EQ(next.kind, pop_e::frame);
   EXPECT_EQ(next.payload, frame(7));
 }
+
+TEST(MicJitter, RejectsReplayedFramesAfterARestart) {
+  jitter_buffer_t buffer;
+  buffer.push(0, frame(0));
+  buffer.push(1, frame(1));
+  buffer.pop();
+  buffer.pop();
+  for (int call = 0; call < jitter_buffer_t::MAX_EMPTY_CONCEAL; ++call) {
+    buffer.pop();
+  }
+  ASSERT_EQ(buffer.pop().kind, pop_e::wait);
+
+  EXPECT_FALSE(buffer.push(0, frame(0)));  // captured earlier, sent again
+  EXPECT_FALSE(buffer.push(1, frame(1)));
+  EXPECT_TRUE(buffer.push(2, frame(2)));  // the sender carries on from where it stopped
+  EXPECT_TRUE(buffer.push(3, frame(3)));
+  auto next = buffer.pop();
+  ASSERT_EQ(next.kind, pop_e::frame);
+  EXPECT_EQ(next.payload, frame(2));
+}
+
+TEST(MicJitter, AcceptsAnyFirstSequence) {
+  jitter_buffer_t buffer;
+  EXPECT_TRUE(buffer.push(4000000000u, frame(1)));
+}

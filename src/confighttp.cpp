@@ -305,6 +305,17 @@ namespace confighttp {
   }
 
   /**
+   * @brief Whether a microphone name is safe to log, show in the tray, and store.
+   *
+   * Any LAN host can supply the name in a pairing request. A line break would let it forge log lines.
+   */
+  bool isPlainMicName(const std::string &name) {
+    return name.size() <= 64 && std::ranges::none_of(name, [](char c) {
+      return static_cast<unsigned char>(c) < 0x20 || c == 0x7f;
+    });
+  }
+
+  /**
    * @brief Authenticate a request by mic token. The token is the sole credential, so the origin check is skipped.
    */
   std::optional<mic::device_t> authenticateMic(resp_https_t response, req_https_t request) {
@@ -1660,7 +1671,7 @@ namespace confighttp {
       auto proof_bytes = SimpleWeb::Crypto::Base64::decode(input_tree.value("proof", ""));
 
       crypto::sha256_t proof;
-      if (name.empty() || name.size() > 64 || nonce.size() != 16 || proof_bytes.size() != proof.size()) {
+      if (name.empty() || !isPlainMicName(name) || nonce.size() != 16 || proof_bytes.size() != proof.size()) {
         bad_request(response, request, "Invalid pairing request");
         return;
       }
@@ -1740,7 +1751,12 @@ namespace confighttp {
       std::stringstream ss;
       ss << request->content.rdbuf();
       auto input_tree = nlohmann::json::parse(ss.str());
-      auto name = mic::submit_pin(input_tree.value("pin", ""), input_tree.value("name", ""));
+      auto device_name = input_tree.value("name", "");
+      if (!isPlainMicName(device_name)) {
+        bad_request(response, request, "Invalid device name");
+        return;
+      }
+      auto name = mic::submit_pin(input_tree.value("pin", ""), device_name);
 
       nlohmann::json output_tree;
       output_tree["status"] = name.has_value();

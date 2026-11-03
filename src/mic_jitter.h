@@ -29,7 +29,9 @@ namespace mic {
 
     /**
      * @brief Queue one frame.
-     * @return false for a duplicate, or for a frame older than the playout point.
+     * @return false for a duplicate, or for a frame older than the playout point. After the buffer
+     *         restarts, also false for any sequence the sender had already used: Calliope numbers
+     *         frames upward for the whole session, so an older number is a replayed packet.
      */
     bool push(std::uint32_t sequence, std::vector<std::uint8_t> payload);
 
@@ -47,5 +49,11 @@ namespace mic {
     bool started = false;
     std::uint32_t next_sequence = 0;
     int empty_pops = 0;
+
+    // Highest sequence ever queued, and the lowest one still allowed after a restart.
+    bool have_highest = false;
+    std::uint32_t highest = 0;
+    bool have_floor = false;
+    std::uint32_t floor_sequence = 0;
   };
 }  // namespace mic

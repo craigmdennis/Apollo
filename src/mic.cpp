@@ -84,6 +84,11 @@ namespace mic {
       std::uint32_t id;
       crypto::cipher::gcm_t cipher;
       steady::time_point expires;
+
+      // Carried over from the ended session. A pong under this key at a sequence that the ended
+      // session already answered would reuse an AES-GCM nonce with different contents.
+      bool have_ping;
+      std::uint32_t last_ping;
     };
 
     // Guarded by state_mutex. Shared by config server threads and the mic thread.
@@ -194,7 +199,7 @@ namespace mic {
     std::variant<session_info_t, session_error_e> begin_session(const device_t &device) {
       if (session) {
         // Keep the old key for a short time so the replaced device receives pong code 4.
-        replaced = replaced_t {session->id, std::move(session->cipher), steady::now() + REPLACED_LIFETIME};
+        replaced = replaced_t {session->id, std::move(session->cipher), steady::now() + REPLACED_LIFETIME, session->have_ping, session->last_ping};
         // End the old session first. Its destructor restores the default capture device,
         // so the new virtual microphone records the real previous default.
         end_session("replaced by "s + device.name, false);
@@ -306,7 +311,13 @@ namespace mic {
       }
 
       if (replaced && header->session_id == replaced->id && header->type == protocol::packet_type_e::ping) {
+        // Same rule as a live session: only a ping newer than every earlier one gets an answer.
+        if (replaced->have_ping && header->sequence <= replaced->last_ping) {
+          return;
+        }
         if (protocol::decrypt_packet(replaced->cipher, protocol::direction_e::to_host, datagram)) {
+          replaced->have_ping = true;
+          replaced->last_ping = header->sequence;
           send_pong(replaced->cipher, replaced->id, header->sequence, protocol::error_e::replaced, {});
         }
       }
