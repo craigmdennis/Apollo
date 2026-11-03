@@ -43,6 +43,18 @@ namespace {
             "\"UserLocalConfigStore\"\n{\n\t\"Software\"\n\t{\n\t\t\"Valve\"\n\t\t{\n\t\t\t\"Steam\"\n\t\t\t{\n\t\t\t\t\"apps\"\n\t\t\t\t{\n" + apps + "\t\t\t\t}\n\t\t\t}\n\t\t}\n\t}\n}\n");
     }
 
+    // Steam doubles each backslash in a quoted path.
+    static std::string vdf_path(const fs::path &path) {
+      std::string out;
+      for (char c : path.string()) {
+        out += c;
+        if (c == '\\') {
+          out += c;
+        }
+      }
+      return out;
+    }
+
     static std::string app(uint32_t id, int64_t last_played) {
       return "\"" + std::to_string(id) + "\" { \"LastPlayed\" \"" + std::to_string(last_played) + "\" }\n";
     }
@@ -90,7 +102,7 @@ TEST_F(SteamActivityTest, FindsMostRecentAccount) {
 TEST_F(SteamActivityTest, PicksNewestInstalledGameAcrossLibraries) {
   fs::path second = root / "second";
   write(root / "steamapps" / "libraryfolders.vdf",
-        "\"libraryfolders\" { \"0\" { \"path\" \"" + root.string() + "\" } \"1\" { \"path\" \"" + second.string() + "\" } }");
+        "\"libraryfolders\" { \"0\" { \"path\" \"" + vdf_path(root) + "\" } \"1\" { \"path\" \"" + vdf_path(second) + "\" } }");
   manifest(root, 100, "Game A");
   manifest(second, 300, "Game C");
   localconfig(42, app(100, 300) + app(200, 500) + app(300, 400) + app(400, 0));
