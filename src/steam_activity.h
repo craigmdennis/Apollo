@@ -52,7 +52,9 @@ namespace steam_activity {
   }
 
   /**
-   * @brief Account ID of the `loginusers.vdf` entry whose `MostRecent` is 1.
+   * @brief Account ID of the `loginusers.vdf` entry that signed in last.
+   *
+   * Prefers `MostRecent` 1, then `AutoLogin` 1, then the newest `timestamp`.
    */
   std::optional<uint32_t> most_recent_account(const kv_t &loginusers);
 

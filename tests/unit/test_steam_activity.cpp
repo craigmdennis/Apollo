@@ -99,6 +99,24 @@ TEST_F(SteamActivityTest, FindsMostRecentAccount) {
   EXPECT_EQ(most_recent_account(parse_kv("\"users\" { }")), std::nullopt);
 }
 
+TEST_F(SteamActivityTest, FallsBackToAutoLoginThenNewestTimestamp) {
+  // Current Steam clients write no MostRecent key.
+  auto auto_login = parse_kv(R"("users" {
+    "76561198000000001" { "AutoLogin" "0" "timestamp" "2000" }
+    "76561198000000000" { "AutoLogin" "1" "timestamp" "1000" }
+  })");
+  EXPECT_EQ(most_recent_account(auto_login), 39734272u);
+
+  auto newest = parse_kv(R"("users" {
+    "76561198000000000" { "AutoLogin" "0" "timestamp" "1000" }
+    "76561198000000001" { "AutoLogin" "0" "timestamp" "2000" }
+  })");
+  EXPECT_EQ(most_recent_account(newest), 39734273u);
+
+  auto single = parse_kv(R"("users" { "76561198000000000" { "AccountName" "a" } })");
+  EXPECT_EQ(most_recent_account(single), 39734272u);
+}
+
 TEST_F(SteamActivityTest, PicksNewestInstalledGameAcrossLibraries) {
   fs::path second = root / "second";
   write(root / "steamapps" / "libraryfolders.vdf",

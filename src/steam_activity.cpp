@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <set>
+#include <tuple>
 
 namespace fs = std::filesystem;
 
@@ -219,14 +220,31 @@ namespace steam_activity {
     if (!users) {
       return std::nullopt;
     }
+    // Current Steam clients often omit MostRecent, so rank by MostRecent, then AutoLogin,
+    // then the newest sign-in timestamp.
+    auto flag = [](const kv_t &user, std::string_view name) {
+      const kv_t *value = user.find(name);
+      return value && value->value == "1";
+    };
+    std::optional<uint32_t> best;
+    std::tuple<bool, bool, uint64_t> best_rank {};
     for (const auto &[key, user] : users->children) {
-      const kv_t *recent = user.find("MostRecent");
       auto id = to_u64(key);
-      if (recent && recent->value == "1" && id && *id > steam_id_base) {
-        return static_cast<uint32_t>(*id - steam_id_base);
+      if (!id || *id <= steam_id_base || *id - steam_id_base > UINT32_MAX) {
+        continue;
+      }
+      const kv_t *timestamp = user.find("timestamp");
+      std::tuple<bool, bool, uint64_t> rank {
+        flag(user, "MostRecent"),
+        flag(user, "AutoLogin"),
+        timestamp ? to_u64(timestamp->value).value_or(0) : 0
+      };
+      if (!best || rank > best_rank) {
+        best = static_cast<uint32_t>(*id - steam_id_base);
+        best_rank = rank;
       }
     }
-    return std::nullopt;
+    return best;
   }
 
   activity_t read_activity(const fs::path &root, uint32_t account_id, uint32_t running_app_id, int64_t now) {
