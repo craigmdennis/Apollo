@@ -310,9 +310,30 @@ namespace confighttp {
    * Any LAN host can supply the name in a pairing request. A line break would let it forge log lines.
    */
   bool isPlainMicName(const std::string &name) {
-    return name.size() <= 64 && std::ranges::none_of(name, [](char c) {
-      return static_cast<unsigned char>(c) < 0x20 || c == 0x7f;
-    });
+    if (name.size() > 64) {
+      return false;
+    }
+    // The JSON parser has already rejected invalid UTF-8, so these byte patterns are whole characters.
+    // Curly apostrophes and accents stay allowed, because iOS names devices "Craig’s iPhone".
+    for (std::size_t i = 0; i < name.size(); ++i) {
+      auto c = static_cast<unsigned char>(name[i]);
+      auto next = [&](std::size_t offset) {
+        return i + offset < name.size() ? static_cast<unsigned char>(name[i + offset]) : 0;
+      };
+      if (c < 0x20 || c == 0x7f) {
+        return false;  // C0 controls and DEL
+      }
+      if (c == 0xC2 && next(1) >= 0x80 && next(1) <= 0x9F) {
+        return false;  // C1 controls, including U+0085 NEL
+      }
+      if (c == 0xE2 && next(1) == 0x80 && ((next(2) >= 0xA8 && next(2) <= 0xAE) || (next(2) >= 0x8E && next(2) <= 0x8F))) {
+        return false;  // U+2028 and U+2029 line breaks, and bidirectional marks and overrides
+      }
+      if (c == 0xE2 && next(1) == 0x81 && next(2) >= 0xA6 && next(2) <= 0xA9) {
+        return false;  // U+2066 to U+2069 bidirectional isolates
+      }
+    }
+    return true;
   }
 
   /**

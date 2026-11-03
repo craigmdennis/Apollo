@@ -310,7 +310,7 @@ TEST_F(SteamActivityTest, RefusesArtWhenAppcacheIsALink) {
 TEST_F(SteamActivityTest, IgnoresLibraryFoldersThatAreNotAbsoluteLocalPaths) {
   fs::path relative = "relative_lib";
   write(root / "steamapps" / "libraryfolders.vdf",
-        "\"libraryfolders\" { \"1\" { \"path\" \"relative_lib\" } \"2\" { \"path\" \"//server/share\" } \"3\" { \"path\" \"\\\\\\\\server\\\\share\" } }");
+        "\"libraryfolders\" { \"1\" { \"path\" \"relative_lib\" } \"2\" { \"path\" \"//server/share\" } \"3\" { \"path\" \"\\\\\\\\server\\\\share\" } \"4\" { \"path\" \"/\\\\server/share\" } }");
   manifest(root / relative, 100, "Game A");
   localconfig(42, app(100, 300));
 

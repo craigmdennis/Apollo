@@ -112,21 +112,31 @@ namespace steam_activity {
       }
     }
 
-    std::optional<std::string> read_text(const fs::path &file) {
+    // Reads at most max_bytes from the open file. The size is checked on the bytes read, not on a
+    // separate stat, because the file can change between the two.
+    std::optional<std::string> read_text(const fs::path &file, uintmax_t max_bytes) {
       std::ifstream in(file, std::ios::binary);
       if (!in) {
         return std::nullopt;
       }
-      return std::string(std::istreambuf_iterator<char>(in), {});
+      std::string text;
+      char chunk[64 * 1024];
+      while (in.read(chunk, sizeof(chunk)) || in.gcount() > 0) {
+        text.append(chunk, static_cast<size_t>(in.gcount()));
+        if (text.size() > max_bytes) {
+          return std::nullopt;
+        }
+      }
+      return text;
     }
 
     std::optional<kv_t> read_kv(const fs::path &file) {
       // A user who can write Steam's folder could otherwise make Apollo load a file of any size.
       std::error_code ec;
-      if (!fs::is_regular_file(file, ec) || fs::file_size(file, ec) > max_kv_bytes || ec) {
+      if (!fs::is_regular_file(file, ec)) {
         return std::nullopt;
       }
-      auto text = read_text(file);
+      auto text = read_text(file, max_kv_bytes);
       if (!text) {
         return std::nullopt;
       }
@@ -140,6 +150,11 @@ namespace steam_activity {
         return std::nullopt;
       }
       return std::strtoull(std::string(text).c_str(), nullptr, 10);
+    }
+
+    // Windows reads both slashes as a separator, and two in a row at the start name a network share.
+    bool is_separator(char c) {
+      return c == '/' || c == '\\';
     }
 
     // The main Steam folder first, then every library folder that libraryfolders.vdf lists.
@@ -166,7 +181,7 @@ namespace steam_activity {
         fs::path lib {text};
         // A relative path depends on the working directory, and a UNC path would make Apollo
         // authenticate to another machine. Neither is a Steam library on this PC.
-        if (!lib.is_absolute() || text.starts_with("\\\\") || text.starts_with("//")) {
+        if (!lib.is_absolute() || (text.size() > 1 && is_separator(text[0]) && is_separator(text[1]))) {
           continue;
         }
         if (std::ranges::none_of(libs, [&](const fs::path &p) {
@@ -394,7 +409,7 @@ namespace steam_activity {
       if (!fs::is_regular_file(file, ec) || fs::file_size(file, ec) > max_bytes || ec) {
         return std::nullopt;
       }
-      return read_text(file);
+      return read_text(file, max_bytes);
     }
   }  // namespace
 
