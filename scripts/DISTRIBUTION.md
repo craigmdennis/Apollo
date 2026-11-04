@@ -20,7 +20,8 @@ From the repo root, on the commit you want to ship (e.g. `master`):
 pwsh -File scripts\publish-release.ps1 -Version 0.5.0
 ```
 This builds a clean Release with the version baked in, makes the NSIS installer,
-tags `v0.5.0`, pushes the tag to the fork, and creates a GitHub Release with
+tags `v0.5.0`, pushes the tag to the remote that points at your fork (`origin`,
+`fork`, or whatever else it is called), and creates a GitHub Release with
 `Apollo-v0.5.0.exe` attached. (The first build is slow — Boost compiles from
 source; later releases reuse `cmake-build-release` and are incremental.)
 

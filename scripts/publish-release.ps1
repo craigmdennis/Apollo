@@ -42,6 +42,23 @@ $repoRoot = git rev-parse --show-toplevel
 if ($LASTEXITCODE -ne 0 -or -not $repoRoot) { throw "Not inside a git repo." }
 $repoRoot = $repoRoot.Trim()
 
+# The tag goes to whichever remote points at the fork, so its name does not matter
+# (`fork`, `origin`, or anything else). gh is told the repo explicitly below.
+function Resolve-PushRemote {
+  foreach ($name in @(git remote)) {
+    $url = git remote get-url $name 2>$null
+    if ($url -and ($url -imatch [regex]::Escape($Repo))) { return $name }
+  }
+  if (@(git remote) -contains "origin") { return "origin" }
+  return $null
+}
+
+$pushRemote = Resolve-PushRemote
+if (-not $pushRemote) {
+  $known = (@(git remote) -join ", ")
+  throw "No git remote points at $Repo (found: $known). Add one, e.g. git remote add fork https://github.com/$Repo.git"
+}
+
 if (-not $AllowDirty -and (git status --porcelain)) { throw "Working tree not clean. Commit/stash first, or pass -AllowDirty." }
 if (git tag --list $tag) { throw "Tag $tag already exists. Bump -Version." }
 
@@ -84,8 +101,9 @@ Write-Host "Built installer: $asset ($([math]::Round((Get-Item $asset).Length/1M
 # --- tag + push + release ---
 git tag $tag
 if ($LASTEXITCODE -ne 0) { throw "git tag $tag failed." }
-git push fork $tag
-if ($LASTEXITCODE -ne 0) { throw "git push of $tag failed." }
+Write-Host "Pushing $tag to remote '$pushRemote'..."
+git push $pushRemote $tag
+if ($LASTEXITCODE -ne 0) { throw "git push of $tag to '$pushRemote' failed." }
 
 if ([string]::IsNullOrWhiteSpace($Notes)) { $Notes = "Apollo $tag" }
 gh release create $tag --repo $Repo --title "Apollo $tag" --notes $Notes "$asset"
