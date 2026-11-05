@@ -69,6 +69,10 @@ $buildScript = Join-Path $msysRoot "tmp\apollo_release_build.sh"
 $bash = @"
 #!/usr/bin/env bash
 set -eo pipefail
+# BRANCH and BUILD_VERSION together make BUILD_VERSION the authoritative version.
+# Without BRANCH, cmake/prep/build_version.cmake falls back to 0.0.0.<sha>, which
+# hides the real version from the in-app update check and the web UI.
+export BRANCH='master'
 export BUILD_VERSION='$Version'
 export PATH="/c/Program Files/nodejs:/ucrt64/bin:`$PATH"
 cd "`$(cygpath -u '$repoRoot')"
