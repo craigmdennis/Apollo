@@ -126,7 +126,7 @@ The Apple TV client offers Sleep in the hold menu. It sends `POST /moonlight/sle
 | Case | Body |
 |---|---|
 | Accepted | Status 200, `sleep` is 1 |
-| The client lacks the `launch` permission | Status 403, `Permission denied` |
+| The client lacks the `sleep` permission | Status 403, `Permission denied` |
 | A stream is running | Status 409, `A session is running` |
 | Apollo does not run on Windows | Status 501, `Sleep is not supported on this host` |
 
@@ -139,6 +139,8 @@ The HTTPS `serverinfo` response gains an `activeclient` element. It holds the de
 ### Permission and switch
 
 The permission `share_activity` has the value `0x00200000`. The first paired client receives it, as part of full permissions. Later clients do not, until it is granted in the client list on the PIN page. Clients paired before this change do not hold it either. The host setting `share_game_activity` is on by default. When it is off, every client is treated as lacking the permission. See [configuration](docs/configuration.md).
+
+The permission `sleep` has the value `0x00400000` and is granted the same way, as **Sleep the PC** in the client list on the PIN page. It gates `POST /moonlight/sleep`. Pairing a client before this change leaves it without the permission, so an existing client must be granted it before Sleep works from its hold menu.
 
 ### Reading user data on Windows
 

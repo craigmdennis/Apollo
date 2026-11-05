@@ -1610,7 +1610,7 @@ namespace nvhttp {
     });
 
     auto named_cert_p = get_verified_cert(request);
-    if (!(named_cert_p->perm & PERM::launch)) {
+    if (!(named_cert_p->perm & PERM::sleep)) {
       BOOST_LOG(debug) << "Permission Sleep denied for [" << named_cert_p->name << "] (" << (uint32_t)named_cert_p->perm << ")";
 
       tree.put("root.<xmlattr>.status_code", 403);
