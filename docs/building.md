@@ -140,6 +140,16 @@ installer at `cmake-build-release\cpack_artifacts\Apollo.exe`. Useful switches:
 - `-Tests` — build and run the GoogleTest suite (`test_sunshine`).
 - `-NoPackage` — build only, skip the installer.
 
+To install that freshly built installer, run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\install-local.ps1
+```
+
+It stops `ApolloService` and any running `sunshine`/`apollo` process before installing
+(avoiding the NSIS "Error opening file for writing" failure), self-elevates, runs a
+silent install, and restarts the service.
+
 ### Clone
 Ensure [git](https://git-scm.com) is installed on your system, then clone the repository using the following command:
 
