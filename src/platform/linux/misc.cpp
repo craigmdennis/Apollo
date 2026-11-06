@@ -1074,4 +1074,10 @@ std::string get_local_ip_for_gateway() {
     // Placeholder
     return false;
   }
+
+  bool
+  system_sleep() {
+    // Suspending the host needs privileges this build does not ask for
+    return false;
+  }
 }  // namespace platf

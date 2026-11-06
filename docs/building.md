@@ -124,6 +124,32 @@ Make sure `node.exe` is on `PATH` before running `cmake` — the `web-ui` CMake 
 invokes `npm install` via `find_program(NPM npm)`, so the official Node's `npm` must be
 visible to CMake.
 
+##### One-command build
+
+Once the dependencies above are installed, you can build and package the whole app
+with a single PowerShell script instead of the `cmake`/`ninja`/`cpack` steps below:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\build-windows.ps1
+```
+
+It configures a Release build, compiles the C++ core and web UI, and produces the NSIS
+installer at `cmake-build-release\cpack_artifacts\Apollo.exe`. Useful switches:
+
+- `-Version 0.5.0` — bake a version string into the build.
+- `-Tests` — build and run the GoogleTest suite (`test_sunshine`).
+- `-NoPackage` — build only, skip the installer.
+
+To install that freshly built installer, run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\install-local.ps1
+```
+
+It stops `ApolloService` and any running `sunshine`/`apollo` process before installing
+(avoiding the NSIS "Error opening file for writing" failure), self-elevates, runs a
+silent install, and restarts the service.
+
 ### Clone
 Ensure [git](https://git-scm.com) is installed on your system, then clone the repository using the following command:
 

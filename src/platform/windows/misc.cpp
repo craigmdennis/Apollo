@@ -27,6 +27,7 @@
 #include <dwmapi.h>
 #include <iphlpapi.h>
 #include <iterator>
+#include <powrprof.h>
 #include <timeapi.h>
 #include <UserEnv.h>
 #include <WinSock2.h>
@@ -1866,6 +1867,46 @@ namespace platf {
   set_clipboard(const std::string& content) {
     std::wstring cpContent = from_utf8(ensureCrLf(content));
     return !setClipboardData(cpContent);
+  }
+
+  bool
+  system_sleep() {
+    // Suspending needs the shutdown privilege, which a fresh process does not hold
+    const DWORD flags = TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY;
+    TOKEN_PRIVILEGES tp;
+    HANDLE token = nullptr;
+    LUID val;
+
+    if (!OpenProcessToken(GetCurrentProcess(), flags, &token) ||
+        !LookupPrivilegeValue(nullptr, SE_SHUTDOWN_NAME, &val)) {
+      BOOST_LOG(warning) << "Could not open the process token to sleep the PC: "sv << GetLastError();
+      if (token) {
+        CloseHandle(token);
+      }
+      return false;
+    }
+
+    tp.PrivilegeCount = 1;
+    tp.Privileges[0].Luid = val;
+    tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+
+    const bool adjusted = !!AdjustTokenPrivileges(token, false, &tp, sizeof(tp), nullptr, nullptr);
+    // It reports success even when it assigned nothing, so the error is the real answer
+    const DWORD adjust_error = GetLastError();
+    CloseHandle(token);
+
+    if (!adjusted || adjust_error != ERROR_SUCCESS) {
+      BOOST_LOG(warning) << "Could not enable the shutdown privilege to sleep the PC: "sv << adjust_error;
+      return false;
+    }
+
+    // false: sleep rather than hibernate; false: do not force; false: honour wake events
+    if (!SetSuspendState(false, false, false)) {
+      BOOST_LOG(warning) << "SetSuspendState() failed: "sv << GetLastError();
+      return false;
+    }
+
+    return true;
   }
 }  // namespace platf
 

@@ -547,6 +547,12 @@ namespace platf {
     // Placeholder
     return false;
   }
+
+  bool
+  system_sleep() {
+    // Suspending the host needs privileges this build does not ask for
+    return false;
+  }
 }  // namespace platf
 
 namespace dyn {

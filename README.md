@@ -32,6 +32,28 @@ Refer to LizardByte's documentation hosted on [Read the Docs](https://docs.lizar
 
 Currently Virtual Display support is Windows only, Linux support is planned and will be implemented in the future.
 
+## Building and installing from source
+
+On Windows, helper scripts in `scripts/` wrap the MSYS2 UCRT64 toolchain so you can build and install without hand-typing the CMake/Ninja/CPack commands. The one-time prerequisites (MSYS2, the UCRT64 package set, and the official Node.js on `PATH`) are in [docs/building.md](docs/building.md).
+
+Build the whole app (C++ core + web UI) and the NSIS installer:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\build-windows.ps1
+```
+
+The installer lands in `cmake-build-release\cpack_artifacts\Apollo.exe`. Useful switches: `-Version 0.5.0` bakes a version, `-Tests` builds and runs the test suite, and `-NoPackage` stops after the build.
+
+Install the build you just made, replacing a running installation:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\install-local.ps1
+```
+
+It stops `ApolloService` and any running `sunshine`/`apollo` process first (which avoids the NSIS "Error opening file for writing" failure), self-elevates, silent-installs, and restarts the service. It defaults to the `cmake-build-release\cpack_artifacts\Apollo.exe` build; pass `-Installer <path>` for another one.
+
+To publish a build as a GitHub Release and update other machines, use `scripts\publish-release.ps1` and `scripts\update-apollo.ps1` — see [scripts/DISTRIBUTION.md](scripts/DISTRIBUTION.md).
+
 ## About Permission System
 
 Check out the [Wiki](https://github.com/ClassicOldSong/Apollo/wiki/Permission-System)
@@ -119,6 +141,19 @@ The wallpaper is the registry value `Control Panel\Desktop\WallPaper`, or else `
 
 Both routes answer 404 when the file is missing, the identifier is invalid, the client lacks the permission, or no user is signed in.
 
+### Sleeping the PC
+
+The Apple TV client offers Sleep in the hold menu. It sends `POST /moonlight/sleep` to the same paired HTTPS channel. The response is the usual GameStream XML.
+
+| Case | Body |
+|---|---|
+| Accepted | Status 200, `sleep` is 1 |
+| The client lacks the `sleep` permission | Status 403, `Permission denied` |
+| A stream is running | Status 409, `A session is running` |
+| Apollo does not run on Windows | Status 501, `Sleep is not supported on this host` |
+
+Sleep ends any session, so Apollo refuses while a stream runs instead of cutting another device off. Before it suspends, it reverts the display configuration that a finished session may have left behind. It answers 200 first, because `SetSuspendState` does not return until the PC wakes. Suspending needs the shutdown privilege, which Apollo enables on its own process; a failure is logged only, as the client has been answered by then.
+
 ### The device that is streaming
 
 The HTTPS `serverinfo` response gains an `activeclient` element. It holds the device name of the running stream, or is empty when none runs. It is empty for a client without the permission. The plain HTTP `serverinfo` does not carry it. Whether stock Moonlight clients ignore the element is not yet confirmed against their parsers.
@@ -126,6 +161,8 @@ The HTTPS `serverinfo` response gains an `activeclient` element. It holds the de
 ### Permission and switch
 
 The permission `share_activity` has the value `0x00200000`. The first paired client receives it, as part of full permissions. Later clients do not, until it is granted in the client list on the PIN page. Clients paired before this change do not hold it either. The host setting `share_game_activity` is on by default. When it is off, every client is treated as lacking the permission. See [configuration](docs/configuration.md).
+
+The permission `sleep` has the value `0x00400000` and is granted the same way, as **Sleep the PC** in the client list on the PIN page. It gates `POST /moonlight/sleep`. Pairing a client before this change leaves it without the permission, so an existing client must be granted it before Sleep works from its hold menu.
 
 ### Reading user data on Windows
 
