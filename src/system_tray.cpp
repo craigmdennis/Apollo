@@ -55,6 +55,7 @@
   #include "process.h"
   #include "network.h"
   #include "src/entry_handler.h"
+  #include "updater.h"
 
 using namespace std::literals;
 
@@ -90,6 +91,16 @@ namespace system_tray {
     proc::proc.terminate();
     platf::restart();
   }
+
+  #ifdef _WIN32
+  void tray_check_for_updates_cb([[maybe_unused]] struct tray_menu *item) {
+    BOOST_LOG(info) << "Checking for updates from system tray"sv;
+
+    if (!updater::check_for_updates()) {
+      BOOST_LOG(error) << "Unable to start the Apollo updater"sv;
+    }
+  }
+  #endif
 
   void tray_quit_cb([[maybe_unused]] struct tray_menu *item) {
     BOOST_LOG(info) << "Quitting from system tray"sv;
@@ -131,6 +142,7 @@ namespace system_tray {
   // Currently display device settings are only supported on Windows
   #ifdef _WIN32
         {.text = "Reset Display Device Config", .cb = tray_reset_display_device_config_cb},
+        {.text = "Check for Updates", .cb = tray_check_for_updates_cb},
   #endif
         {.text = "Restart", .cb = tray_restart_cb},
         {.text = "Quit", .cb = tray_quit_cb},

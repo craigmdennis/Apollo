@@ -30,6 +30,12 @@ namespace system_tray {
   void tray_restart_cb([[maybe_unused]] struct tray_menu *item);
 
   /**
+   * @brief Callback for checking for an Apollo update from the system tray.
+   * @param item The tray menu item.
+   */
+  void tray_check_for_updates_cb([[maybe_unused]] struct tray_menu *item);
+
+  /**
    * @brief Callback for exiting Sunshine from the system tray.
    * @param item The tray menu item.
    */

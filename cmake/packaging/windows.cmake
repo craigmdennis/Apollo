@@ -46,6 +46,11 @@ install(DIRECTORY "${SUNSHINE_SOURCE_ASSETS_DIR}/windows/misc/autostart/"
         DESTINATION "scripts"
         COMPONENT autostart)
 
+# updater used by the tray's "Check for Updates" item
+install(DIRECTORY "${SUNSHINE_SOURCE_ASSETS_DIR}/windows/misc/update/"
+        DESTINATION "scripts"
+        COMPONENT assets)
+
 # scripts
 install(DIRECTORY "${SUNSHINE_SOURCE_ASSETS_DIR}/windows/misc/firewall/"
         DESTINATION "scripts"
