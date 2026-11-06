@@ -68,3 +68,7 @@ tests/steam_standalone/.check_endpoints.*
 # Written into the working directory when test_sunshine runs from the repository root
 test_sunshine.log
 test_sunshine.log.backup
+
+# Bug tracking: local scratchpad and tracker config (issues live on GitHub)
+BUGS.md
+.claude/bug-tracker.json
