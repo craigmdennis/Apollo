@@ -32,6 +32,28 @@ Refer to LizardByte's documentation hosted on [Read the Docs](https://docs.lizar
 
 Currently Virtual Display support is Windows only, Linux support is planned and will be implemented in the future.
 
+## Building and installing from source
+
+On Windows, helper scripts in `scripts/` wrap the MSYS2 UCRT64 toolchain so you can build and install without hand-typing the CMake/Ninja/CPack commands. The one-time prerequisites (MSYS2, the UCRT64 package set, and the official Node.js on `PATH`) are in [docs/building.md](docs/building.md).
+
+Build the whole app (C++ core + web UI) and the NSIS installer:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\build-windows.ps1
+```
+
+The installer lands in `cmake-build-release\cpack_artifacts\Apollo.exe`. Useful switches: `-Version 0.5.0` bakes a version, `-Tests` builds and runs the test suite, and `-NoPackage` stops after the build.
+
+Install the build you just made, replacing a running installation:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\install-local.ps1
+```
+
+It stops `ApolloService` and any running `sunshine`/`apollo` process first (which avoids the NSIS "Error opening file for writing" failure), self-elevates, silent-installs, and restarts the service. It defaults to the `cmake-build-release\cpack_artifacts\Apollo.exe` build; pass `-Installer <path>` for another one.
+
+To publish a build as a GitHub Release and update other machines, use `scripts\publish-release.ps1` and `scripts\update-apollo.ps1` — see [scripts/DISTRIBUTION.md](scripts/DISTRIBUTION.md).
+
 ## About Permission System
 
 Check out the [Wiki](https://github.com/ClassicOldSong/Apollo/wiki/Permission-System)
