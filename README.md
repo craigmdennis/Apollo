@@ -52,7 +52,7 @@ powershell -ExecutionPolicy Bypass -File scripts\install-local.ps1
 
 It stops `ApolloService` and any running `sunshine`/`apollo` process first (which avoids the NSIS "Error opening file for writing" failure), self-elevates, silent-installs, and restarts the service. It defaults to the `cmake-build-release\cpack_artifacts\Apollo.exe` build; pass `-Installer <path>` for another one.
 
-To publish a build as a GitHub Release and update other machines, use `scripts\publish-release.ps1` and `scripts\update-apollo.ps1` — see [scripts/DISTRIBUTION.md](scripts/DISTRIBUTION.md).
+To publish a build as a GitHub Release and update other machines, run `scripts\publish-release.ps1 -Version 0.7.0`. It builds from the tip of `master`, creates tag `v0.7.0` at that exact commit, and attaches the installer. Merging a PR never tags or releases anything on its own. See [scripts/DISTRIBUTION.md](scripts/DISTRIBUTION.md).
 
 ## About Permission System
 

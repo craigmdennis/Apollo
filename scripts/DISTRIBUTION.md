@@ -19,15 +19,34 @@ Works with a private repo — only `gh` auth is needed.
 > Release.
 
 ## Cut a release (on the dev machine with the MSYS2 toolchain)
-From the repo root, on the commit you want to ship (e.g. `master`):
+From the repo root, on `master`, after the PR you want to ship is merged:
 ```powershell
-pwsh -File scripts\publish-release.ps1 -Version 0.5.0
+powershell -ExecutionPolicy Bypass -File scripts\publish-release.ps1 -Version 0.7.0
 ```
-This builds a clean Release with the version baked in, makes the NSIS installer,
-tags `v0.5.0`, pushes the tag to the remote that points at your fork (`origin`,
-`fork`, or whatever else it is called), and creates a GitHub Release with
-`Apollo-v0.5.0.exe` attached. (The first build is slow — Boost compiles from
-source; later releases reuse `cmake-build-release` and are incremental.)
+(Windows PowerShell 5.1 is enough — `pwsh`/PowerShell 7 is not required.)
+What it does:
+1. Fetches `origin` and resolves the commit to release — by default the tip of the
+   remote default branch (`master`), so a merge commit is included automatically.
+2. Refuses unless local `HEAD` is exactly that commit and tracked files are clean, so
+   the installer is built from the tree the tag will point at.
+3. Builds a Release with the version baked in and makes the NSIS installer.
+4. Runs `gh release create v0.7.0 --target <sha>`, which creates the tag **at that
+   commit on GitHub** and attaches `Apollo-v0.7.0.exe` in one step.
+
+Omit `-Version` to bump the minor of the newest tag (`v0.6.0` → `0.7.0`). Preview
+without changing anything with `-DryRun`.
+
+Already built the installer elsewhere? Publish it without rebuilding:
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\publish-release.ps1 -Version 0.7.0 -InstallerPath .\Apollo.exe
+```
+Release an older commit that is still on `master` (e.g. a hotfix): `-Target <sha>`.
+The first build is slow — Boost compiles from source; later releases reuse
+`cmake-build-release` and are incremental.
+
+> **Merging a PR does not tag or release anything.** `master` moves; the tag only
+> exists once `publish-release.ps1` (or a manual GitHub release) creates it. A tag
+> always means "this exact commit is what shipped".
 
 ## Update a machine
 ```powershell
@@ -48,8 +67,15 @@ Register-ScheduledTask -TaskName "Apollo Auto-Update" -Action $action -Trigger $
 ```
 
 ## Notes / caveats
-- **Bare pushes to `master` do not rebuild** — you publish a build by cutting a
-  release with `publish-release.ps1`. (Auto-build-on-push needs CI; not set up.)
+- **Merging a PR does not create a tag or release.** `master` simply moves; you cut a
+  release explicitly with `publish-release.ps1`. (Auto-build-on-push needs CI; not set up.)
+- The tag is created by `gh release create --target`, so it points at the resolved
+  commit even if another machine did the build. The script then verifies the remote
+  tag resolves to that commit.
+- `-Target` must be a commit already on the default branch; the script refuses to tag
+  a feature branch.
+- A prebuilt `-InstallerPath` is uploaded as-is; the script cannot verify it was built
+  from the target commit, so check that yourself.
 - The first time you run `update-apollo.ps1`, verify the **silent install** behaves
   (the SudoVDA driver step is the thing to watch). If a release changes the driver,
   Windows may prompt to trust it.
