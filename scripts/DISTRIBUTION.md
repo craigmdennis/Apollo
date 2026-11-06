@@ -14,6 +14,10 @@ Works with a private repo — only `gh` auth is needed.
    `ApolloService` and SudoVDA driver exist.
 3. Copy `scripts\update-apollo.ps1` onto the machine (or fetch it from the repo).
 
+> **Just want to build without publishing?** Use `scripts\build-windows.ps1` instead —
+> it does the same configure/build/package steps but skips the tag, push, and GitHub
+> Release.
+
 ## Cut a release (on the dev machine with the MSYS2 toolchain)
 From the repo root, on the commit you want to ship (e.g. `master`):
 ```powershell
